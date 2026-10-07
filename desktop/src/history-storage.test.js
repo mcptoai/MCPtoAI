@@ -1,0 +1,17 @@
+const assert=require('assert');const fs=require('fs');const path=require('path');
+const root=__dirname;
+const main=fs.readFileSync(path.join(root,'main.js'),'utf8');
+const preload=fs.readFileSync(path.join(root,'preload.js'),'utf8');
+const renderer=fs.readFileSync(path.join(root,'renderer.js'),'utf8');
+const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
+assert(main.includes("history:storage-get"));
+assert(main.includes("history:storage-set"));
+assert(main.includes("['mcptoai','local'].includes(provider)"));
+assert(preload.includes("historyStorage:"));
+assert(preload.includes("setHistoryStorage:"));
+assert(html.includes('id="historyStorageSelect"'));
+assert(html.includes('value="remote" disabled'));
+assert(renderer.includes("currentHistoryProvider='mcptoai'"));
+assert(renderer.includes("setHistoryStorage(next)"));
+assert(renderer.includes("History stays on this device"));
+console.log('history storage UI/IPC: OK');

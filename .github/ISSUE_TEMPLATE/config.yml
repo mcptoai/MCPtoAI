@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/mcptoai/MCPtoAI/security
+    about: Please use the repository Security area for private vulnerability reporting when available. Do not open a public issue.
+  - name: MCPtoAI website
+    url: https://mcptoai.com
+    about: Product information, downloads and official MCPtoAI links.

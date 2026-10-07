@@ -1,0 +1,111 @@
+{
+  "name": "mcptoai-desktop",
+  "version": "0.1.9",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "pack:mac": "npm run build:permission-helper:mac && npm run build:agent:mac && electron-builder --mac dir",
+    "dist:mac": "npm run build:permission-helper:mac && npm run build:agent:mac && electron-builder --mac dmg",
+    "dist:win": "npm run build:agent:win && electron-builder --win nsis",
+    "build:agent:mac": "cd ../device-agent && .venv/bin/pyinstaller --noconfirm --clean mcptoai-agent.spec && cd ../desktop && node scripts/write-agent-version.js",
+    "build:permission-helper:mac": "mkdir -p native/bin && xcrun swiftc native/PermissionHelper.swift -framework AVFoundation -o native/bin/permission-helper",
+    "build:agent:win": "powershell -ExecutionPolicy Bypass -File ../device-agent/scripts/build-windows.ps1 && node scripts/sign-built-agent-win.js && node scripts/write-agent-version-win.js",
+    "pack:win": "npm run build:agent:win && electron-builder --win dir",
+    "pack:mac:local": "npm run build:permission-helper:mac && npm run build:agent:mac && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --config.mac.identity=null",
+    "security:scan:mac": "python3 ../scripts/package-security-scan.py --resources dist/mac-arm64/MCPtoAI.app/Contents/Resources --desktop-dir .",
+    "security:scan:win": "python ../scripts/package-security-scan.py --resources dist/win-unpacked/resources --desktop-dir ."
+  },
+  "devDependencies": {
+    "electron": "41.10.6",
+    "electron-builder": "^26.0.12",
+    "terser": "^5.39.0"
+  },
+  "build": {
+    "appId": "com.bkty.mcptoai.desktop",
+    "productName": "MCPtoAI",
+    "files": [
+      "src/**/*",
+      "!src/**/*.bak",
+      "!src/**/*.bak_*",
+      "!src/**/*~",
+      "!src/**/*.test.js"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "minimumSystemVersion": "13.0",
+      "artifactName": "MCPtoAI-${version}-${arch}.${ext}",
+      "extraResources": [
+        {
+          "from": "native/bin/permission-helper",
+          "to": "permission-helper"
+        },
+        {
+          "from": "src/app-update-mac.yml",
+          "to": "app-update.yml"
+        }
+      ],
+      "icon": "build/icon.icns",
+      "identity": "AHMET BAKTIAYA (WCUHC7RX92)",
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "publish": [
+        {
+          "provider": "generic",
+          "url": "https://api.mcptoai.com/releases/macos/"
+        }
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "MCPtoAI-${version}-${arch}-Setup.${ext}",
+      "icon": "build/icon.ico",
+      "signtoolOptions": {
+        "sign": "./scripts/artifact-signing.js",
+        "signingHashAlgorithms": [
+          "sha256"
+        ],
+        "publisherName": "BKTY LTD"
+      },
+      "publish": [
+        {
+          "provider": "generic",
+          "url": "https://api.mcptoai.com/releases/windows/"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "extraResources": [
+      {
+        "from": "../device-agent/dist/mcptoai-agent",
+        "to": "agent"
+      },
+      {
+        "from": "agent-version.json",
+        "to": "agent-version.json"
+      }
+    ],
+    "afterSign": "scripts/after-sign-agent-version.js",
+    "afterPack": "scripts/harden-electron-package.js"
+  },
+  "main": "src/main.js",
+  "description": "MCPtoAI secure cross-platform desktop device bridge",
+  "author": "BKTY LTD",
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "overrides": {
+    "http-cache-semantics": "4.3.0"
+  }
+}

@@ -1,0 +1,54 @@
+# Secrets / local configuration
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+*.p12
+*.p8
+
+# Dependencies / virtual environments
+**/node_modules/
+**/.venv/
+**/venv/
+
+# Build / release artifacts
+**/dist/
+**/build/
+**/out/
+release-stage/
+*.dmg
+*.zip
+*.exe
+*.msi
+
+# Caches / OS
+**/__pycache__/
+**/.pytest_cache/
+*.pyc
+.DS_Store
+
+# Local backup/scratch files
+**/*.bak_*
+**/*.bak
+**/backups/
+
+# Logs
+*.log
+logs/
+# Generated native/PyInstaller artifacts
+**/native/bin/
+**/*.spec
+
+# Desktop packaging source files (not generated build output)
+!desktop/build/
+desktop/build/*
+!desktop/build/icon.ico
+!desktop/build/icon.icns
+!desktop/build/entitlements.mac.plist
+
+# Python editable-install metadata
+**/*.egg-info/
