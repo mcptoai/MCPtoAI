@@ -1,20 +1,21 @@
 {
   "name": "mcptoai-desktop",
-  "version": "0.1.9",
+  "version": "0.1.15",
   "private": true,
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "pack:mac": "npm run build:permission-helper:mac && npm run build:agent:mac && electron-builder --mac dir",
-    "dist:mac": "npm run build:permission-helper:mac && npm run build:agent:mac && electron-builder --mac dmg",
+    "pack:mac": "npm run build:permission-helper:mac && npm run build:agent:mac && npm run build:agent-bundle:mac && electron-builder --mac dir",
+    "dist:mac": "npm run build:permission-helper:mac && npm run build:agent:mac && npm run build:agent-bundle:mac && electron-builder --mac dmg",
     "dist:win": "npm run build:agent:win && electron-builder --win nsis",
     "build:agent:mac": "cd ../device-agent && .venv/bin/pyinstaller --noconfirm --clean mcptoai-agent.spec && cd ../desktop && node scripts/write-agent-version.js",
     "build:permission-helper:mac": "mkdir -p native/bin && xcrun swiftc native/PermissionHelper.swift -framework AVFoundation -o native/bin/permission-helper",
     "build:agent:win": "powershell -ExecutionPolicy Bypass -File ../device-agent/scripts/build-windows.ps1 && node scripts/sign-built-agent-win.js && node scripts/write-agent-version-win.js",
     "pack:win": "npm run build:agent:win && electron-builder --win dir",
-    "pack:mac:local": "npm run build:permission-helper:mac && npm run build:agent:mac && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --config.mac.identity=null",
+    "pack:mac:local": "npm run build:permission-helper:mac && npm run build:agent:mac && npm run build:agent-bundle:mac && MCPTOAI_ALLOW_UNSIGNED_AGENT=1 CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --config.mac.identity=null",
     "security:scan:mac": "python3 ../scripts/package-security-scan.py --resources dist/mac-arm64/MCPtoAI.app/Contents/Resources --desktop-dir .",
-    "security:scan:win": "python ../scripts/package-security-scan.py --resources dist/win-unpacked/resources --desktop-dir ."
+    "security:scan:win": "python ../scripts/package-security-scan.py --resources dist/win-unpacked/resources --desktop-dir .",
+    "build:agent-bundle:mac": "node scripts/build-device-agent-bundle-mac.js"
   },
   "devDependencies": {
     "electron": "41.10.6",
@@ -43,8 +44,8 @@
       "artifactName": "MCPtoAI-${version}-${arch}.${ext}",
       "extraResources": [
         {
-          "from": "native/bin/permission-helper",
-          "to": "permission-helper"
+          "from": "agent-version.json",
+          "to": "agent-version.json"
         },
         {
           "from": "src/app-update-mac.yml",
@@ -59,6 +60,12 @@
         {
           "provider": "generic",
           "url": "https://api.mcptoai.com/releases/macos/"
+        }
+      ],
+      "extraFiles": [
+        {
+          "from": "build/device-agent/MCPtoAI Device Agent.app",
+          "to": "Library/LoginItems/MCPtoAI Device Agent.app"
         }
       ]
     },
@@ -80,22 +87,23 @@
           "provider": "generic",
           "url": "https://api.mcptoai.com/releases/windows/"
         }
+      ],
+      "extraResources": [
+        {
+          "from": "../device-agent/dist/mcptoai-agent",
+          "to": "agent"
+        },
+        {
+          "from": "agent-version.json",
+          "to": "agent-version.json"
+        }
       ]
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
     },
-    "extraResources": [
-      {
-        "from": "../device-agent/dist/mcptoai-agent",
-        "to": "agent"
-      },
-      {
-        "from": "agent-version.json",
-        "to": "agent-version.json"
-      }
-    ],
+    "extraResources": [],
     "afterSign": "scripts/after-sign-agent-version.js",
     "afterPack": "scripts/harden-electron-package.js"
   },

@@ -17,7 +17,9 @@ exports.default=async function afterSign(context){
   if(context.electronPlatformName!=='darwin')return;
   const app=path.join(context.appOutDir,`${context.packager.appInfo.productFilename}.app`);
   const res=path.join(app,'Contents','Resources'),verFile=path.join(res,'agent-version.json');
-  const meta=JSON.parse(fs.readFileSync(verFile,'utf8')),actual=hashTree(path.join(res,'agent'));
+  const agentApp=path.join(app,'Contents','Library','LoginItems','MCPtoAI Device Agent.app'),agentDir=path.join(agentApp,'Contents','Resources','agent');
+  const meta=JSON.parse(fs.readFileSync(verFile,'utf8')),actual=hashTree(agentDir);
+  execFileSync('/usr/bin/codesign',['--verify','--deep','--strict','--verbose=2',agentApp],{stdio:'inherit'});
   if(meta.sha256===actual){console.log('  • agent-version.json zaten imzalı ağaçla eşleşiyor');return}
   fs.writeFileSync(verFile,JSON.stringify({...meta,sha256:actual},null,2)+'\n');
   const opts=context.packager.platformSpecificBuildOptions||{};
