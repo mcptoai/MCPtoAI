@@ -6,7 +6,7 @@
 **Let the AI model you choose work with your own computer and MCP tools — under device-side control.**
 
 [![Website](https://img.shields.io/badge/Website-mcptoai.com-0ea5e9)](https://mcptoai.com)
-[![Download](https://img.shields.io/badge/Download-macOS%20%7C%20Windows-2563eb)](https://mcptoai.com/downloads/)
+[![Download](https://img.shields.io/badge/Download-macOS%20%7C%20Windows%20%7C%20Linux-2563eb)](https://mcptoai.com/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/Security-policy-7c3aed)](SECURITY.md)
 
@@ -30,8 +30,7 @@ With MCPtoAI you can:
 - choose whether conversation history is stored in MCPtoAI Cloud or only on the selected device;
 - use the web app from another browser or phone while the paired device stays in control of local actions.
 
-> **Available now:** macOS 13+ on Apple silicon and Windows 10+ (x64).
-> **Coming soon:** Linux CLI and Docker.
+> **Available now:** macOS 13+ on Apple silicon, Windows 10+ (x64), Linux CLI 0.1.15 and the official Docker image.
 
 ## See it in action
 
@@ -49,6 +48,8 @@ Download the signed installer from:
 
 - **macOS:** signed, notarized and distributed for Apple silicon.
 - **Windows:** signed installer for x64 systems.
+- **Linux CLI:** `python3 -m pip install mcptoai==0.1.15`
+- **Docker:** `docker pull ghcr.io/mcptoai/mcptoai:0.1.15`
 
 ### 2. Pair your computer
 
