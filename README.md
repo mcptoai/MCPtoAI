@@ -10,6 +10,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/Security-policy-7c3aed)](SECURITY.md)
 [![Client CI](https://github.com/mcptoai/MCPtoAI/actions/workflows/client-ci.yml/badge.svg)](https://github.com/mcptoai/MCPtoAI/actions/workflows/client-ci.yml)
+[![Package security](https://github.com/mcptoai/MCPtoAI/actions/workflows/package-security.yml/badge.svg)](https://github.com/mcptoai/MCPtoAI/actions/workflows/package-security.yml)
+[![Release](https://img.shields.io/github/v/release/mcptoai/MCPtoAI)](https://github.com/mcptoai/MCPtoAI/releases/latest)
 
 [Website](https://mcptoai.com) · [Web App](https://app.mcptoai.com) · [Downloads](https://mcptoai.com/downloads/) · [Demo](https://youtu.be/nAhHaHcHs1U)
 
