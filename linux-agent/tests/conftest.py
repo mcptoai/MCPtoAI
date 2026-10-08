@@ -17,6 +17,11 @@ def isolated_vault(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    # Linux config_dir prefers XDG_CONFIG_HOME when the environment provides it
+    # (including some CI runners). Point it into this test's temporary home too.
+    xdg = home / ".config"
+    xdg.mkdir(parents=True)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
     # Windows production config lives under %APPDATA%\MCPtoAI. Redirect it
     # into the per-test temporary home too, so tests never touch real user data.
     appdata = home / "AppData" / "Roaming"
