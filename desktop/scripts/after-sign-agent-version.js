@@ -19,11 +19,18 @@ exports.default=async function afterSign(context){
   const res=path.join(app,'Contents','Resources'),verFile=path.join(res,'agent-version.json');
   const agentApp=path.join(app,'Contents','Library','LoginItems','MCPtoAI Device Agent.app'),agentDir=path.join(agentApp,'Contents','Resources','agent');
   const meta=JSON.parse(fs.readFileSync(verFile,'utf8')),actual=hashTree(agentDir);
+  const opts=context.packager.platformSpecificBuildOptions||{};
+  // Unsigned local/CI builds intentionally have no valid nested-app signature.
+  // Verify signatures only for signed release builds; the integrity hash is still
+  // refreshed for unsigned packages so package scanning can exercise the real tree.
+  if(!opts.identity){
+    if(meta.sha256!==actual)fs.writeFileSync(verFile,JSON.stringify({...meta,sha256:actual},null,2)+'\n');
+    console.log('  • imzasız derleme: agent-version.json güncellendi, imza doğrulaması atlandı');
+    return;
+  }
   execFileSync('/usr/bin/codesign',['--verify','--deep','--strict','--verbose=2',agentApp],{stdio:'inherit'});
   if(meta.sha256===actual){console.log('  • agent-version.json zaten imzalı ağaçla eşleşiyor');return}
   fs.writeFileSync(verFile,JSON.stringify({...meta,sha256:actual},null,2)+'\n');
-  const opts=context.packager.platformSpecificBuildOptions||{};
-  if(!opts.identity){console.log('  • imzasız derleme: agent-version.json güncellendi, yeniden mühürleme yok');return}
   const args=['--force','--sign',opts.identity,'--timestamp'];
   if(opts.hardenedRuntime!==false)args.push('--options','runtime');
   if(opts.entitlements)args.push('--entitlements',path.resolve(context.packager.projectDir,opts.entitlements));
