@@ -19,6 +19,16 @@
 
 ---
 
+<div align="center">
+  <img src="docs/images/web-chat.png" alt="MCPtoAI Web running an AI tool call on a paired computer" width="100%">
+</div>
+
+## Watch MCPtoAI in action
+
+[▶ **Watch the full demo on YouTube**](https://youtu.be/nAhHaHcHs1U)
+
+See installation, device pairing, provider setup, model switching, privacy settings and a real AI → device tool call.
+
 ## What MCPtoAI does
 
 Most AI chats stop at the conversation. MCPtoAI lets the model you choose work with a paired computer and connected MCP services while keeping local capabilities behind permissions you control on the device.
@@ -35,11 +45,44 @@ With MCPtoAI you can:
 
 > **Available now:** macOS 13+ on Apple silicon, Windows 10+ (x64), Linux CLI 0.1.15 and the official Docker image.
 
-## See it in action
+## Your computer. Your permissions.
 
-[▶ **Watch the MCPtoAI demo on YouTube**](https://youtu.be/nAhHaHcHs1U)
+<table>
+<tr>
+<td width="50%" valign="top"><img src="docs/images/app-overview.png" alt="MCPtoAI Desktop overview with connected Device Agent"></td>
+<td width="50%" valign="top"><img src="docs/images/app-permissions.png" alt="MCPtoAI device permission controls"></td>
+</tr>
+<tr>
+<td align="center"><strong>Device overview</strong><br>See the paired computer and Device Agent status.</td>
+<td align="center"><strong>Device-side permissions</strong><br>Control local capabilities with Off, Ask and Allow.</td>
+</tr>
+</table>
 
-The demo shows the complete path from installation and device pairing to provider setup, model switching, device-only history and an AI tool call on the paired computer.
+## Connect MCP services. Control every tool.
+
+<table>
+<tr>
+<td width="50%" valign="top"><img src="docs/images/app-mcp-overview.png" alt="MCPtoAI MCP server connections"></td>
+<td width="50%" valign="top"><img src="docs/images/app-mcp-tools.png" alt="MCPtoAI per-tool MCP permissions"></td>
+</tr>
+<tr>
+<td align="center"><strong>Connect MCP servers</strong><br>Use built-in, remote and custom MCP connections.</td>
+<td align="center"><strong>Tool-level control</strong><br>Review and control the tools exposed by each connection.</td>
+</tr>
+</table>
+
+## Choose your model. Choose where your data lives.
+
+<table>
+<tr>
+<td width="50%" valign="top"><img src="docs/images/app-providers.png" alt="MCPtoAI AI provider configuration"></td>
+<td width="50%" valign="top"><img src="docs/images/app-settings.png" alt="MCPtoAI settings including conversation history location"></td>
+</tr>
+<tr>
+<td align="center"><strong>Bring your provider</strong><br>Configure supported cloud providers or local model setups.</td>
+<td align="center"><strong>Choose history storage</strong><br>Use MCPtoAI Cloud or keep conversation history on the selected device.</td>
+</tr>
+</table>
 
 ## Get started in three steps
 
