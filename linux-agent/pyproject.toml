@@ -46,6 +46,9 @@ Homepage = "https://mcptoai.com"
 Documentation = "https://mcptoai.com/how-it-works/"
 Privacy = "https://mcptoai.com/privacy/"
 Terms = "https://mcptoai.com/terms/"
+Source = "https://github.com/mcptoai/MCPtoAI/tree/main/linux-agent"
+Issues = "https://github.com/mcptoai/MCPtoAI/issues"
+Security = "https://github.com/mcptoai/MCPtoAI/security"
 
 [project.scripts]
 mcptoai = "mcptoai_linux.cli:main"

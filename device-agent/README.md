@@ -1,6 +1,6 @@
 # MCPtoAI — Device Agent
 
-The agent runs on the user's own computer. The user's AI-provider API key remains in the OS Keychain and the model/agent loop runs locally. MCPtoAI's backend provides identity, device registration and relay routing; it does not need the user's AI-provider API key.
+The agent runs on the user's own computer. The user's AI-provider API key remains in the supported operating-system credential store and the model/agent loop runs locally. MCPtoAI's backend provides identity, device registration and relay routing; it does not need the user's AI-provider API key.
 
 ## User flow
 
@@ -27,11 +27,11 @@ python -m mcptoai_agent connect
 
 ## MCPtoAI Auth0 configuration (product owner only)
 
-MCPtoAI needs one Auth0 API with Identifier `https://api.mcptoai.com` and RS256 signing, plus a **Native** application for MCPtoAI Desktop with Device Code grant enabled. The Native application's Client ID is public application configuration; no Client Secret is embedded in MCPtoAI Desktop. Refresh tokens and provider keys are stored in the OS Keychain.
+MCPtoAI needs one Auth0 API with Identifier `https://api.mcptoai.com` and RS256 signing, plus a **Native** application for MCPtoAI Desktop with Device Code grant enabled. The Native application's Client ID is public application configuration; no Client Secret is embedded in MCPtoAI Desktop. Refresh tokens and provider keys are stored in the supported operating-system credential store.
 
 ## Security boundaries
 
 - No provider API key is sent to or stored by the MCPtoAI backend.
 - The desktop agent makes the outbound relay connection; users do not expose an inbound server.
 - Tool permissions are enforced locally. Dangerous operations require approval.
-- End-to-end payload encryption/device signing is a separate hardening step and must not be claimed until implemented.
+- Device connections are authenticated with device-specific signing keys. MCPtoAI does not currently provide end-to-end payload encryption; relay traffic is protected in transit with TLS.

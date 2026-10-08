@@ -9,6 +9,7 @@
 [![Download](https://img.shields.io/badge/Download-macOS%20%7C%20Windows%20%7C%20Linux-2563eb)](https://mcptoai.com/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/Security-policy-7c3aed)](SECURITY.md)
+[![Client CI](https://github.com/mcptoai/MCPtoAI/actions/workflows/client-ci.yml/badge.svg)](https://github.com/mcptoai/MCPtoAI/actions/workflows/client-ci.yml)
 
 [Website](https://mcptoai.com) · [Web App](https://app.mcptoai.com) · [Downloads](https://mcptoai.com/downloads/) · [Demo](https://youtu.be/nAhHaHcHs1U)
 
@@ -40,7 +41,7 @@ The demo shows the complete path from installation and device pairing to provide
 
 ## Get started in three steps
 
-### 1. Install MCPtoAI Desktop
+### 1. Install MCPtoAI
 
 Download the signed installer from:
 
@@ -53,7 +54,7 @@ Download the signed installer from:
 
 ### 2. Pair your computer
 
-Open MCPtoAI Desktop, sign in and pair the computer with your MCPtoAI account. The bundled Device Agent runs on the paired computer and handles local capabilities.
+On macOS or Windows, open MCPtoAI Desktop and connect your account. On Linux, run `mcptoai login` after installing the CLI, or run the equivalent command inside the Docker container. The device-side agent authenticates the computer and handles local capabilities.
 
 ### 3. Add a provider and make the first tool call
 
@@ -97,10 +98,10 @@ MCPtoAI does **not** currently provide end-to-end encryption. Traffic between co
 
 MCPtoAI is designed around local control rather than unrestricted remote execution.
 
-- Provider API keys stay on the user's computer. On macOS and Windows they are kept in the operating system credential store.
+- Provider API keys stay on the user's computer in the supported credential store (Keychain on macOS, Windows Credential Manager on Windows, and the supported local credential store on Linux).
 - Filesystem access is limited to the workspace and locations permitted on the device.
 - Terminal access can be disabled locally.
-- Sensitive actions can require approval depending on the configured permission mode.
+- High-impact actions require live approval; other tools follow the configured Off / Ask / Allow policy.
 - Device connections are authenticated and signed with device-specific keys.
 - Device-only conversation history is kept on the selected device and is not persisted in MCPtoAI Cloud.
 - Release artifacts are delivered through the official MCPtoAI update and download endpoints.

@@ -26,3 +26,9 @@ mcptoai-agent = "mcptoai_agent.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["mcptoai_agent*"]
+
+[project.urls]
+Homepage = "https://mcptoai.com"
+Source = "https://github.com/mcptoai/MCPtoAI/tree/main/device-agent"
+Issues = "https://github.com/mcptoai/MCPtoAI/issues"
+Security = "https://github.com/mcptoai/MCPtoAI/security"
