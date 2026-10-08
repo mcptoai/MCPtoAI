@@ -1,0 +1,13 @@
+include LICENSE
+include README.md
+prune tests
+global-exclude *.py[cod]
+global-exclude __pycache__
+global-exclude .DS_Store
+global-exclude *.bak
+global-exclude *.bak_*
+global-exclude *.old
+global-exclude *.orig
+global-exclude *.tmp
+global-exclude .env
+global-exclude .env.*

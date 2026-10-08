@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcptoai"
+version = "0.1.15"
+description = "MCPtoAI for Linux: chat with AI on your server from the web, your phone or the terminal"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "BKTY LTD", email = "info@bktyconsultancy.co.uk" }]
+keywords = ["mcp", "ai", "agent", "llm", "remote", "server", "cli"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: System :: Systems Administration",
+]
+# Test edilmiş sürümler (Mac/Windows agent'ıyla aynı). fastmcp ve mcp yeni sürümlerde API
+# değiştirdiği için sabitlenmeleri şart.
+dependencies = [
+  "fastmcp==2.14.7",
+  "mcp==1.30.0",
+  "httpx==0.28.1",
+  "websockets==15.0.1",
+  "PyJWT[crypto]==2.15.1",
+  "cryptography==50.0.2",
+  "keyring==25.7.0",
+  "python-dotenv==1.2.4",
+  "Pillow==12.3.0",
+  "pydantic==2.13.5",
+  "anyio==4.15.1",
+  "openai==3.23.0",
+  "anthropic==1.11.0",
+  "packaging==26.3",
+]
+
+[project.urls]
+Homepage = "https://mcptoai.com"
+Documentation = "https://mcptoai.com/how-it-works/"
+Privacy = "https://mcptoai.com/privacy/"
+Terms = "https://mcptoai.com/terms/"
+
+[project.scripts]
+mcptoai = "mcptoai_linux.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["mcptoai_linux*"]

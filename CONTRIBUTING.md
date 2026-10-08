@@ -2,7 +2,7 @@
 
 Thanks for your interest in MCPtoAI.
 
-This repository contains the source of the MCPtoAI Desktop app. The Device Agent, hosted web app and relay are not part of this repository. Contributions should stay focused on the Desktop app unless a maintainer explicitly asks for something broader. Bug reports and feature requests about any part of MCPtoAI are welcome as issues.
+This repository contains the open-source MCPtoAI clients: the Desktop app, the Device Agent and the Linux CLI. The hosted web app, relay and production infrastructure are not part of this repository. Bug reports and feature requests about any part of MCPtoAI are welcome as issues.
 
 ## Before you start
 
@@ -14,21 +14,20 @@ This repository contains the source of the MCPtoAI Desktop app. The Device Agent
 ## Development setup
 
 ```text
-desktop/   Electron Desktop app
+desktop/        Electron Desktop app
+device-agent/   Device Agent (macOS and Windows)
+linux-agent/    Linux CLI
 ```
 
-Install the official MCPtoAI release from <https://mcptoai.com/downloads/> first: in development
-mode the Desktop app uses the Device Agent installed by the release.
+See the Development section of the [README](README.md) for setup commands. In development mode
+the Desktop app uses the Device Agent from `device-agent/.venv`.
 
-```bash
-cd desktop
-npm install
-npm start
-```
+Run the test suite of every component you change before opening a pull request. Changes to
+permissions, credential storage, the relay client or authentication should include tests and
+should be checked against the [threat model](docs/THREAT_MODEL.md).
 
-Packaging scripts are defined in `desktop/package.json`. Building the Device Agent, signing and
-notarization require maintainer-only components and credentials and are not expected for normal
-contributions.
+Signed and notarized release builds require maintainer-only credentials and are not expected for
+normal contributions.
 
 ## Pull requests
 

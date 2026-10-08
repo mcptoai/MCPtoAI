@@ -1,0 +1,2 @@
+# İsteğe bağlı: tarayıcı araçları için
+playwright>=1.62,<2

@@ -109,19 +109,29 @@ For vulnerability reporting and supported security versions, read [SECURITY.md](
 
 ## Repository scope
 
-This public repository contains the source of **MCPtoAI Desktop**.
+The MCPtoAI clients are open source. The hosted web app, relay and production infrastructure are operated by BKTY LTD and are not part of this repository.
 
 ```text
-desktop/   Electron Desktop app (UI, main process, local integration and updater code)
+desktop/        Electron Desktop app for macOS and Windows
+device-agent/   Device Agent bundled with the Desktop app (macOS and Windows)
+linux-agent/    Terminal-only Linux CLI, published on PyPI as `mcptoai`
+docs/           Threat model and history provider design
 ```
 
-The Device Agent binary bundled with the official installer, the hosted MCPtoAI web application, the relay and production infrastructure are operated separately by BKTY LTD and are not included in this repository.
-
-Because those components are not present here, cloning this repository alone does not reproduce the complete hosted MCPtoAI product. For normal use, install the signed release from the official download page.
+Start with the [threat model](docs/THREAT_MODEL.md) to see what MCPtoAI protects, where the trust boundaries are and which security invariants the clients enforce.
 
 ## Development
 
-Install the official MCPtoAI release first so the Desktop app can use the Device Agent provided by the supported installer.
+Device Agent (Python 3.11+):
+
+```bash
+cd device-agent
+python3 -m venv .venv
+.venv/bin/pip install -e . pytest
+.venv/bin/python -m pytest -q
+```
+
+Desktop app (Node.js). In development mode it uses the Device Agent from `device-agent/.venv`:
 
 ```bash
 cd desktop
@@ -129,7 +139,16 @@ npm install
 npm start
 ```
 
-Packaging, signing and notarization require maintainer-only components and credentials and are not expected for normal contributions.
+Linux CLI:
+
+```bash
+cd linux-agent
+python3 -m venv .venv
+.venv/bin/pip install -e . pytest
+.venv/bin/python -m pytest -q
+```
+
+Signed and notarized release builds require maintainer-only credentials and are not expected for normal contributions.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
 

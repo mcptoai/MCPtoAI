@@ -1,0 +1,28 @@
+[project]
+name = "mcptoai-agent"
+version = "0.1.15"
+description = "MCPtoAI device agent: kullanıcının kendi API anahtarıyla cihazda çalışan agent döngüsü + MCP araçları"
+requires-python = ">=3.11"
+
+dependencies = [
+  "httpx",
+  "PyJWT[crypto]",
+  "python-dotenv",
+  "keyring",
+  # fastmcp ve mcp yeni ana sürümlerde API değiştirdi (streamablehttp_client, get_tools):
+  # test edilmiş ana sürümlerle sınırlı. openai, anthropic ve websockets doğrudan
+  # kullanılıyor ama listede yoktu; temiz kurulumda agent çalışmıyordu.
+  "fastmcp>=2.14.7,<3",
+  "mcp>=1.30,<2",
+  "openai>=3.19,<4",
+  "anthropic>=1.8,<2",
+  "websockets>=15,<16",
+  "Pillow",
+  "pywin32>=310; sys_platform == 'win32'",
+]
+
+[project.scripts]
+mcptoai-agent = "mcptoai_agent.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["mcptoai_agent*"]
