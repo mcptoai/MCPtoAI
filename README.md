@@ -1,64 +1,79 @@
 <div align="center">
+  <img src="https://mcptoai.com/assets/logo-256.png" alt="MCPtoAI" width="112" height="112">
 
 # MCPtoAI
 
-**Connect AI models to your own computer and MCP tools — while keeping control on your device.**
+**Let the AI model you choose work with your own computer and MCP tools — under device-side control.**
 
-[Website](https://mcptoai.com) · [Web App](https://app.mcptoai.com) · [Downloads](https://mcptoai.com/downloads/)
+[![Website](https://img.shields.io/badge/Website-mcptoai.com-0ea5e9)](https://mcptoai.com)
+[![Download](https://img.shields.io/badge/Download-macOS%20%7C%20Windows-2563eb)](https://mcptoai.com/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Security Policy](https://img.shields.io/badge/Security-policy-7c3aed)](SECURITY.md)
+
+[Website](https://mcptoai.com) · [Web App](https://app.mcptoai.com) · [Downloads](https://mcptoai.com/downloads/) · [Demo](https://youtu.be/nAhHaHcHs1U)
 
 </div>
 
-## Demo
+---
 
-[▶ Watch the MCPtoAI demo on YouTube](https://youtu.be/nAhHaHcHs1U)
+## What MCPtoAI does
 
-See MCPtoAI install, pair a device, switch AI providers, keep history on-device, and let AI work with files on your computer.
+Most AI chats stop at the conversation. MCPtoAI lets the model you choose work with a paired computer and connected MCP services while keeping local capabilities behind permissions you control on the device.
 
-## What is MCPtoAI?
+With MCPtoAI you can:
 
-MCPtoAI is a cross-platform bridge between AI models and the computer you already use. It combines a desktop app, a local Device Agent and MCP support so AI can work with local capabilities such as files, terminal commands and connected MCP servers under user-controlled permissions.
+- work with files inside the locations you allow;
+- run terminal commands when terminal access is enabled;
+- connect MCP servers and use their tools in the same workflow;
+- switch AI providers without starting a new conversation;
+- keep provider credentials on your own device;
+- choose whether conversation history is stored in MCPtoAI Cloud or only on the selected device;
+- use the web app from another browser or phone while the paired device stays in control of local actions.
 
-This repository contains the source of the MCPtoAI Desktop app. The Device Agent is distributed as a signed binary with the Desktop installer, and the hosted MCPtoAI web service and relay are operated separately by BKTY LTD.
+> **Available now:** macOS 13+ on Apple silicon and Windows 10+ (x64).
+> **Coming soon:** Linux CLI and Docker.
 
-## Why MCPtoAI?
+## See it in action
 
-Many AI tools are powerful but stop at the browser. MCPtoAI is designed to make the user's own machine part of the workflow without turning that machine into an uncontrolled remote shell.
+[▶ **Watch the MCPtoAI demo on YouTube**](https://youtu.be/nAhHaHcHs1U)
 
-- **Cross-platform** — macOS and Windows today; Linux and Docker coming soon.
-- **Local control** — device-side permissions decide what AI can access.
-- **Bring your own provider** — provider credentials are configured on the user's device.
-- **MCP support** — connect MCP servers and expose their tools through the same workflow.
-- **Web and phone access** — use the MCPtoAI web app from a browser while the paired device stays under local control.
-- **Desktop app** — set up permissions, providers and tools from a graphical app; a terminal-only Linux CLI is coming soon.
+The demo shows the complete path from installation and device pairing to provider setup, model switching, device-only history and an AI tool call on the paired computer.
 
-## Quick start
+## Get started in three steps
 
-### macOS and Windows
+### 1. Install MCPtoAI Desktop
 
-Download the signed desktop installer from:
+Download the signed installer from:
 
 **https://mcptoai.com/downloads/**
 
-The Desktop app includes the Device Agent and guides you through installation, account pairing, provider setup and optional operating-system permissions.
+- **macOS:** signed, notarized and distributed for Apple silicon.
+- **Windows:** signed installer for x64 systems.
 
-### Linux and Docker
+### 2. Pair your computer
 
-Coming soon: a terminal-only Linux CLI and a Docker image. Watch this repository or follow
-[mcptoai.com](https://mcptoai.com) for the release.
+Open MCPtoAI Desktop, sign in and pair the computer with your MCPtoAI account. The bundled Device Agent runs on the paired computer and handles local capabilities.
 
-## Core capabilities
+### 3. Add a provider and make the first tool call
 
-The exact tools available depend on platform, permissions and the MCP servers you connect. MCPtoAI is built around these capabilities:
+Add the provider you want to use, configure the local permissions you are comfortable with, then open MCPtoAI Web and ask the model to perform a task on the paired computer.
 
-- Pair a computer with an MCPtoAI account.
-- Use supported AI providers and models.
-- Keep provider credentials in the device-side credential/vault layer.
-- Expose a user-selected filesystem workspace.
-- Allow or block terminal-command execution locally.
-- Connect and manage MCP servers.
-- Run long-running jobs.
-- Use MCPtoAI from the web, a phone browser or the Desktop app.
-- Update the Desktop/Agent through the supported release channels.
+A useful first test is:
+
+> Show me the largest files in my Downloads folder.
+
+The exact tools available depend on platform, local permissions and the MCP servers you connect.
+
+## Why MCPtoAI
+
+| | MCPtoAI |
+| --- | --- |
+| **Bring your own model/provider** | Use supported cloud providers or local model setups. |
+| **Device-side control** | Local capabilities are governed by the permissions configured on the paired computer. |
+| **Provider credentials** | Stored on the user's device rather than MCPtoAI servers. |
+| **MCP support** | Connect MCP servers and expose their tools through the same workspace. |
+| **Remote access** | Use MCPtoAI Web from another browser or phone while execution stays on the paired device. |
+| **History choice** | Store conversation history in MCPtoAI Cloud or only on the selected device. |
 
 ## How it fits together
 
@@ -66,50 +81,70 @@ The exact tools available depend on platform, permissions and the MCP servers yo
 flowchart LR
     U[User] --> W[MCPtoAI Web / Phone]
     W --> R[MCPtoAI hosted relay]
-    R --> A[Device Agent]
+    R --> A[Device Agent on paired computer]
     A --> F[Files / Workspace]
     A --> T[Terminal / Jobs]
     A --> M[MCP Servers]
-    A --> P[AI Provider Credentials]
+    A --> P[AI Providers]
 ```
 
-The hosted service coordinates authenticated sessions. Sensitive local actions are executed by the Device Agent on the paired machine, subject to the permissions configured there.
+The hosted service coordinates authenticated sessions and relays traffic between the web app and the paired device. Local actions are executed by the Device Agent and remain subject to the permissions configured on that computer.
 
-## Security model
+MCPtoAI does **not** currently provide end-to-end encryption. Traffic between components is protected in transit using TLS.
 
-MCPtoAI is intentionally permission-oriented:
+## Security and privacy model
 
-- Local filesystem access is scoped to the configured workspace.
-- Terminal access can be enabled or disabled on the device.
-- Optional OS permissions are requested only for capabilities that need them.
-- Provider keys stay on the user's machine. On macOS and Windows they are kept in the operating system's credential store.
-- Conversation history can be kept on MCPtoAI Cloud or only on the device.
-- Release artifacts are distributed through the official MCPtoAI release endpoints.
+MCPtoAI is designed around local control rather than unrestricted remote execution.
 
-Please read [SECURITY.md](SECURITY.md) before reporting a vulnerability.
+- Provider API keys stay on the user's computer. On macOS and Windows they are kept in the operating system credential store.
+- Filesystem access is limited to the workspace and locations permitted on the device.
+- Terminal access can be disabled locally.
+- Sensitive actions can require approval depending on the configured permission mode.
+- Device connections are authenticated and signed with device-specific keys.
+- Device-only conversation history is kept on the selected device and is not persisted in MCPtoAI Cloud.
+- Release artifacts are delivered through the official MCPtoAI update and download endpoints.
 
-## Repository layout
+For vulnerability reporting and supported security versions, read [SECURITY.md](SECURITY.md).
+
+## Repository scope
+
+This public repository contains the source of **MCPtoAI Desktop**.
 
 ```text
-desktop/   Electron Desktop app (UI, main process, agent installer and updater)
+desktop/   Electron Desktop app (UI, main process, local integration and updater code)
 ```
 
-This repository is the Desktop app's source. It does not contain the Device Agent, the hosted
-web application, the relay or production infrastructure, so the Desktop app cannot be built
-into a working product from this repository alone. To use MCPtoAI, install the signed release
-from the download page.
+The Device Agent binary bundled with the official installer, the hosted MCPtoAI web application, the relay and production infrastructure are operated separately by BKTY LTD and are not included in this repository.
+
+Because those components are not present here, cloning this repository alone does not reproduce the complete hosted MCPtoAI product. For normal use, install the signed release from the official download page.
+
+## Development
+
+Install the official MCPtoAI release first so the Desktop app can use the Device Agent provided by the supported installer.
+
+```bash
+cd desktop
+npm install
+npm start
+```
+
+Packaging, signing and notarization require maintainer-only components and credentials and are not expected for normal contributions.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
 
 ## Project status
 
-MCPtoAI is under active development. Interfaces, commands and packaging may still evolve while the project is in the `0.x` release series.
+MCPtoAI is under active development in the `0.x` series. Interfaces, packaging and supported integrations may continue to evolve.
 
-For current installers and installation instructions, use the official download page rather than relying on filenames in the source tree:
+For current installers and installation instructions, always use:
 
 **https://mcptoai.com/downloads/**
 
-## Contributing
+## Support and feedback
 
-Bug reports, feature proposals and integration requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
+- Use **GitHub Issues** for reproducible bugs and feature requests.
+- Do **not** open public issues for suspected vulnerabilities; follow [SECURITY.md](SECURITY.md).
+- Product information and downloads are available at [mcptoai.com](https://mcptoai.com).
 
 ## License
 
