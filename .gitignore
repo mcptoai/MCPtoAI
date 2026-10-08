@@ -42,6 +42,7 @@ logs/
 # Generated native/PyInstaller artifacts
 **/native/bin/
 **/*.spec
+!device-agent/mcptoai-agent.spec
 
 # Desktop packaging source files (not generated build output)
 !desktop/build/

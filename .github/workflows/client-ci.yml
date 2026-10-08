@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   device-agent:
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -46,7 +46,11 @@ jobs:
           python -m pip install -e . pytest
       - name: Test
         working-directory: linux-agent
-        run: python -m pytest -q
+        env:
+          XDG_CONFIG_HOME: ${{ runner.temp }}/mcptoai-linux-config
+        run: |
+          mkdir -p "$XDG_CONFIG_HOME"
+          python -m pytest -q
 
   desktop-source:
     runs-on: ubuntu-latest
