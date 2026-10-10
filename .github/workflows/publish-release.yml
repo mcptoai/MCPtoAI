@@ -1,0 +1,93 @@
+name: Publish GitHub Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version without v prefix (e.g. 0.1.18)'
+        required: true
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: github-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate all source versions
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="${INPUT_VERSION}"
+          fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid version"; exit 1; }
+          python3 - "$version" <<'PY'
+          import json, pathlib, re, sys
+          version = sys.argv[1]
+          desktop = json.loads(pathlib.Path("desktop/package.json").read_text())["version"]
+          agent = re.search(r'(?m)^version\s*=\s*"([^"]+)"', pathlib.Path("device-agent/pyproject.toml").read_text()).group(1)
+          linux = re.search(r'(?m)^version\s*=\s*"([^"]+)"', pathlib.Path("linux-agent/pyproject.toml").read_text()).group(1)
+          for name, actual in [("Desktop",desktop),("Device Agent",agent),("Linux CLI",linux)]:
+              print(f"{name}: {actual}")
+              if actual != version:
+                  raise SystemExit(f"Version mismatch: {name} {actual} != {version}")
+          PY
+          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+      - name: Verify published packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$RELEASE_VERSION"
+          curl -fsSI "https://pypi.org/pypi/mcptoai/$version/json" >/dev/null
+          curl -fsSI "https://api.mcptoai.com/releases/macos/MCPtoAI-$version-arm64.dmg?release=$version" >/dev/null
+          curl -fsSI "https://api.mcptoai.com/releases/windows/MCPtoAI-$version-x64-Setup.exe" >/dev/null
+      - name: Create tag for manual release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --tags
+          if git rev-parse -q --verify "refs/tags/v$RELEASE_VERSION" >/dev/null; then
+            echo "Tag already exists"; exit 1
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/v$RELEASE_VERSION" -f sha="${GITHUB_SHA}"
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$RELEASE_VERSION"
+          cat > release-notes.md <<EOF
+          MCPtoAI $version — macOS, Windows, Linux CLI and Docker.
+
+          ### Downloads
+          - [macOS Apple Silicon DMG](https://api.mcptoai.com/releases/macos/MCPtoAI-$version-arm64.dmg?release=$version)
+          - [Windows x64 installer](https://api.mcptoai.com/releases/windows/MCPtoAI-$version-x64-Setup.exe)
+          - [Linux CLI on PyPI](https://pypi.org/project/mcptoai/$version/)
+          - [Official Docker image](https://github.com/mcptoai/MCPtoAI/pkgs/container/mcptoai)
+
+          \`python3 -m pip install mcptoai==$version\`
+
+          \`docker pull ghcr.io/mcptoai/mcptoai:$version\`
+
+          See [Downloads](https://mcptoai.com/downloads/) for current installation instructions.
+          EOF
+          gh release create "v$version" --repo "$GITHUB_REPOSITORY" --title "MCPtoAI v$version" --notes-file release-notes.md --latest --verify-tag
