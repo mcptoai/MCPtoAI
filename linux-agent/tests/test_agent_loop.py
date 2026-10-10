@@ -42,10 +42,11 @@ def test_loop(tmp_path: Path):
         return False  # write_file onay ister -> reddet
 
     result = asyncio.run(session.run("test", deny, emit))
-    assert result == "bitti"
+    assert result == ""
     assert not (tmp_path / "x.txt").exists()          # reddedilen yazma gerçekleşmemeli
     decisions = [a["decision"] for a in session.audit]
-    assert decisions == ["user_denied", "user_denied"]
+    assert decisions == ["user_denied"]
+    assert events[-1]["type"] == "done"
 
 
 def test_path_outside_roots(tmp_path: Path):

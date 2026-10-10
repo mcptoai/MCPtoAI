@@ -159,7 +159,12 @@ class AgentSession:
                     allowed, reason = await self.policy.authorize(call.name, call.arguments, approver)
                     self._log(call.name, call.arguments, reason)
                     if not allowed:
-                        content, is_error = f"Tool call was not permitted ({reason}).", True
+                        content = f"Tool call was not permitted ({reason})."
+                        self.history.append({"role":"tool","tool_call_id":call.id,"name":call.name,"content":content,"is_error":True})
+                        await emit({"type":"tool_result","id":call.id,"name":call.name,"is_error":True,"preview":content})
+                        await emit({"type":"text","text":"The requested tool was not approved, so this request was stopped. No further tools were executed."})
+                        await emit({"type":"done"})
+                        return ""
                     else:
                         if self.remote_caller and call.name.startswith("mcp__"):
                             content, is_error = await self.remote_caller(call.name, call.arguments)

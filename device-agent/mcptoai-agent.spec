@@ -46,7 +46,7 @@ exe = EXE(
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
-    codesign_identity=os.getenv("MCPTOAI_PYINSTALLER_CODESIGN_IDENTITY", "") or None,
+    codesign_identity=os.getenv("MCPTOAI_PYINSTALLER_CODESIGN_IDENTITY", "Developer ID Application: AHMET BAKTIAYA (WCUHC7RX92)") or None,
     entitlements_file=None,
 )
 coll = COLLECT(

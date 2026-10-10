@@ -18,13 +18,16 @@ from .providers import make_provider, ToolSpec
 from .tools import build_server
 from .mcp_config import load_rules, save_rules, state as mcp_state, custom_servers, add_server, update_server, remove_server
 from .policy import ToolPolicy, Decision
+from .reliability import MessageReceiptStore
+from .event_journal import EventJournal
+from .answer_sync import answer_sync_loop
 logger=logging.getLogger("mcptoai.relay_client")
 
 from .cloud_chat import handle_cloud_chat_request
 from .history import selected_history_provider_name
 
 class RelayClient:
-    def __init__(self,cfg:Settings):
+    def __init__(self,cfg:Settings,receipt_store:MessageReceiptStore|None=None):
         self.cfg=cfg; self.sessions={}; self._session_last_used={}; self.pending_approvals={}; self.ws=None; self._mcp_discovery_task=None; self._remote_tool_specs={}; self._remote_tool_map={}; self._mcp_discovered=None; self._mcp_discovered_at=0.0; self._ipc_server=None; self._stdio_runtimes={}
         # Bağlantı yokken üretilen sohbet olayları (ilerleme, onay isteği, son yanıt) burada
         # bekler ve yeniden bağlanınca sırayla gönderilir; en eskiler taşarsa düşer.
@@ -33,6 +36,41 @@ class RelayClient:
         self._job_sig={}; self._job_watch_task=None
         # Web'e en son bildirilen geçmiş tercihi; Desktop'tan değiştirilince yeniden bildirilir.
         self._history_sent=None
+        # Reconnect-safe turn protocol. Sequence numbers are scoped to this agent
+        # process (event_epoch). A bounded per-session journal lets the web ask for
+        # events it missed after a socket reconnect without re-running tools.
+        self._event_epoch=uuid.uuid4().hex
+        self._event_seq={}
+        self._event_journal={}
+        self._turn_state={}
+        self._turn_events={}
+        self._replay_tasks={}
+        self._receipts=receipt_store or MessageReceiptStore()
+        self._durable_events=EventJournal()
+        self._answer_sync_task=None
+        # Rebuild replay state after an agent restart; do not resume interrupted
+        # tool execution or manufacture a valid approval future.
+        for restored_sid, entries in self._durable_events.data.items():
+            if not isinstance(entries, list): continue
+            valid=[e for e in entries if isinstance(e,dict) and isinstance(e.get('seq'),int) and isinstance(e.get('event'),dict)]
+            if not valid: continue
+            # Use a new epoch after restart, preserving sequence within each session.
+            # Browser cursors from the previous process must not suppress recovery.
+            resolved={e.get('event',{}).get('approval_id') for e in valid if e.get('event',{}).get('type')=='approval_resolved'}
+            valid=[{**e,'event_epoch':self._event_epoch,
+                    'event':({'type':'approval_interrupted','approval_id':e['event'].get('approval_id'),'tool':e['event'].get('tool')}
+                             if e['event'].get('type')=='approval_interrupted' and e['event'].get('approval_id') not in resolved
+                             else e['event'])} for e in valid]
+            self._event_journal[restored_sid]=collections.deque(valid[-500:],maxlen=500)
+            self._event_seq[restored_sid]=max(e['seq'] for e in valid)
+            turns=self._turn_events.setdefault(restored_sid,collections.OrderedDict())
+            for entry in valid:
+                tid=entry.get('turn_id')
+                if tid: turns.setdefault(tid,collections.deque(maxlen=500)).append(entry)
+            while len(turns)>2: turns.popitem(last=False)
+            if turns:
+                last_tid=next(reversed(turns))
+                self._turn_state[restored_sid]={'id':last_tid,'active':False}
     async def _start_local_ipc(self):
         if os.name == "nt" or self._ipc_server: return
         from .paths import config_dir
@@ -66,9 +104,11 @@ class RelayClient:
                 headers={"Authorization":f"Bearer {token}",**device_ws_proof(device_id)}
                 async with websockets.connect(relay_url, additional_headers=headers, ping_interval=20, ping_timeout=20, max_size=2**20) as ws:
                     self.ws=ws; delay=1
-                    await self._send({"type":"hello","role":"device","protocol":1})
+                    await self._send_hello()
                     logger.info("Relay connected: %s",relay_url)
                     await self._flush_outbox()
+                    if self._answer_sync_task is None or self._answer_sync_task.done():
+                        self._answer_sync_task=asyncio.create_task(answer_sync_loop(self.cfg,self._durable_events))
                     await self._send_jobs_snapshot()
                     # Web sormadan önce de geçmiş tercihini bildir (web bilmeden kaydetmesin).
                     await self._send_history_status()
@@ -99,6 +139,60 @@ class RelayClient:
             except Exception as exc:
                 self.ws=None; logger.warning("Relay disconnected: %s",exc)
                 await asyncio.sleep(delay+random.random()); delay=min(delay*2,self.cfg.reconnect_max_seconds)
+    async def _send_hello(self):
+        await self._send({"type":"hello","role":"device","protocol":1,"capabilities":["event_replay_v1","message_dedupe_v1","turn_replay_v1","replay_complete_v1"],"event_epoch":self._event_epoch})
+    async def _send_event(self,session_id,event,turn_id=None):
+        sid=str(session_id or "")
+        seq=self._event_seq.get(sid,0)+1; self._event_seq[sid]=seq
+        envelope={"type":"event","session_id":sid,"seq":seq,"event_epoch":self._event_epoch,"event":event}
+        if turn_id is not None:
+            envelope["turn_id"]=turn_id
+            turns=self._turn_events.setdefault(sid,collections.OrderedDict())
+            turns.setdefault(turn_id,collections.deque(maxlen=500)).append(envelope)
+            while len(turns)>2: turns.popitem(last=False)
+            turn=self._turn_state.get(sid)
+            if turn and turn["id"]==turn_id and event.get("type")=="done": turn["active"]=False
+        journal=self._event_journal.setdefault(sid,collections.deque(maxlen=500)); journal.append(envelope)
+        self._durable_events.append(sid,envelope)
+        # Günlük ve tur durumları aynı oturum sınırında budanır.
+        if len(self._event_journal)>50:
+            for old_sid in list(self._event_journal)[:-50]:
+                self._event_journal.pop(old_sid,None); self._event_seq.pop(old_sid,None)
+                self._turn_state.pop(old_sid,None); self._turn_events.pop(old_sid,None)
+        await self._send(envelope)
+
+    async def _handle_event_replay_request(self,msg):
+        sid=str(msg.get("session_id") or ""); mode=msg.get("mode") or "after_seq"
+        after=msg.get("after_seq")
+        if not sid or len(sid)>128 or mode not in ("after_seq","active_turn","last_turn"): return
+        if mode=="after_seq" and (not isinstance(after,int) or isinstance(after,bool) or after<0): return
+        # Aynı oturumun önceki replay isteği tamamlanmadan ikinci replay başlatılmaz.
+        current=asyncio.current_task()
+        prior=self._replay_tasks.get(sid)
+        if prior is not None and prior is not current and not prior.done(): return
+        self._replay_tasks[sid]=current
+        turn=self._turn_state.get(sid)
+        turn_id=(turn["id"] if turn and (mode=="last_turn" or turn["active"]) else None) if mode!="after_seq" else None
+        cursor=after if mode=="after_seq" else 0
+        socket=self.ws
+        try:
+            while socket is not None and self.ws is socket:
+                source=(self._event_journal.get(sid,()) if mode=="after_seq" else self._turn_events.get(sid,{}).get(turn_id,()))
+                items=[x for x in source if x["seq"]>cursor] if (mode=="after_seq" or turn_id) else []
+                if not items: break
+                for envelope in items:
+                    if self.ws is not socket: return
+                    packet={**envelope,"replay":mode}
+                    try: await socket.send(json.dumps(packet,ensure_ascii=False,default=str))
+                    except Exception: return
+                    cursor=envelope["seq"]
+                    await asyncio.sleep(0.125)
+            if self.ws is socket and socket is not None:
+                try: await socket.send(json.dumps({"type":"replay_complete","session_id":sid,"mode":mode,"turn_id":turn_id,"through_seq":cursor,"event_epoch":self._event_epoch}))
+                except Exception: return
+        finally:
+            if self._replay_tasks.get(sid) is current: self._replay_tasks.pop(sid,None)
+
     async def _send(self,event):
         data=json.dumps(event,ensure_ascii=False,default=str)
         if self.ws:
@@ -194,7 +288,9 @@ class RelayClient:
 
     async def _handle(self,msg):
         typ=msg.get("type")
+        if typ=="hello": asyncio.create_task(self._send_hello()); return
         if typ=="message": asyncio.create_task(self._run_message(msg)); return
+        if typ=="event_replay_request": asyncio.create_task(self._handle_event_replay_request(msg)); return
         if typ=="job_stop": asyncio.create_task(self._stop_job(msg)); return
         if typ=="providers_request": asyncio.create_task(self._send_providers()); return
         if typ=="models_request": asyncio.create_task(self._send_models(msg.get("provider"))); return
@@ -537,10 +633,16 @@ class RelayClient:
         if len(sid)>128: return
         text=str(msg.get("message") or "").strip()
         if not text or len(text.encode("utf-8"))>256*1024: return
+        # Yeni tur, mevcut tur bitmeden makbuzlanmaz.
+        active=self._turn_state.get(sid)
+        incoming_id=str(msg.get("message_id") or "").strip()
+        if active and active["active"] and incoming_id!=active["id"]:
+            await self._send_event(sid,{"type":"error","code":"turn_in_progress","message":"A turn is already running in this conversation. Wait for it to finish or stop it first."})
+            return
         requested_provider=str(msg.get("provider") or self.cfg.provider).strip()
         try: provider_cfg=self._chat_provider_cfg(requested_provider)
         except Exception as exc:
-            await self._send({"type":"event","session_id":sid,"event":{"type":"error","message":f"{type(exc).__name__}: {exc}"}}); return
+            await self._send_event(sid,{"type":"error","message":f"{type(exc).__name__}: {exc}"}); return
         requested_model=str(msg.get("model") or provider_cfg.model).strip()
         if not requested_model or len(requested_model)>160 or any(ord(c)<32 for c in requested_model):
             requested_model=provider_cfg.model
@@ -572,18 +674,58 @@ class RelayClient:
             if not data_url.startswith("data:image/") or ";base64," not in data_url: return
             total_image_chars += len(data_url)
         if total_image_chars>384*1024: return
-        async def emit(event): await self._send({"type":"event","session_id":sid,"event":event})
+        message_id=str(msg.get("message_id") or "").strip()
+        if message_id:
+            try: message_id=str(uuid.UUID(message_id))
+            except (ValueError,TypeError,AttributeError): return
+            claimed,prior=self._receipts.claim(message_id,sid)
+            if not claimed:
+                logger.warning("Duplicate message_id suppressed for session %s: %s (%s)",sid,message_id,prior)
+                buffered=any(int(x.get("seq") or 0)>0 for x in self._event_journal.get(sid,()))
+                if prior=="interrupted":
+                    await self._send_event(sid,{"type":"error","message":"This request was interrupted on the device and will not be replayed automatically because its outcome may be unknown."})
+                elif buffered:
+                    await self._handle_event_replay_request({"session_id":sid,"after_seq":0})
+                elif prior=="running":
+                    # The original turn is still executing. A transport retry with
+                    # the same message_id must never create a second turn and must
+                    # not emit a misleading terminal error. Future events from the
+                    # original turn will continue on this session.
+                    logger.info("Duplicate running request suppressed for session %s: %s",sid,message_id)
+                else:
+                    await self._send_event(sid,{"type":"error","message":"This request was already processed on the device and will not be run again. Its previous result is no longer available in the replay buffer."})
+                return
+        turn_id=message_id or str(uuid.uuid4())
+        self._turn_state[sid]={"id":turn_id,"active":True}
+        self._turn_events.setdefault(sid,collections.OrderedDict()).setdefault(turn_id,collections.deque(maxlen=500))
+        async def emit(event): await self._send_event(sid,event,turn_id=turn_id)
         async def approver(tool,args):
             aid=str(uuid.uuid4()); fut=asyncio.get_running_loop().create_future(); self.pending_approvals[aid]=(fut,sid)
-            await self._send({"type":"event","session_id":sid,"event":{"type":"approval_required","approval_id":aid,"tool":tool,"arguments":args}})
-            try: return await asyncio.wait_for(fut,timeout=self.cfg.approval_timeout_seconds)
-            except asyncio.TimeoutError: return False
-            finally: self.pending_approvals.pop(aid,None)
+            await self._send_event(sid,{"type":"approval_required","approval_id":aid,"tool":tool,"arguments":args},turn_id=turn_id)
+            outcome = "expired"
+            try:
+                allowed = await asyncio.wait_for(fut,timeout=self.cfg.approval_timeout_seconds)
+                outcome = "approved" if allowed else "denied"
+                return allowed
+            except asyncio.TimeoutError:
+                return False
+            except asyncio.CancelledError:
+                outcome = "cancelled"
+                raise
+            finally:
+                self.pending_approvals.pop(aid,None)
+                await self._send_event(sid,{"type":"approval_resolved","approval_id":aid,"status":outcome},turn_id=turn_id)
         capability=str(msg.get("capability") or "").strip().casefold()
         try:
             if capability: await session.run_capability(capability,text,approver,emit)
             else: await session.run(text,approver,emit,images=images,language=msg.get("language"),context=context,preferred_mcp_server_ids=preferred)
         except Exception as exc:
             logger.exception("Agent session failed"); await emit({"type":"error","message":f"{type(exc).__name__}: {exc}"})
+            if message_id: self._receipts.finish(message_id,"failed")
+        else:
+            if message_id: self._receipts.finish(message_id,"completed")
+        finally:
+            if self._turn_state.get(sid,{}).get("id")==turn_id:
+                self._turn_state[sid]["active"]=False
 
 async def run_relay_client(cfg:Settings): await RelayClient(cfg).run_forever()

@@ -354,7 +354,7 @@ docker run -d \
   ghcr.io/mcptoai/mcptoai:latest
 ```
 
-The `mcptoai` named volume keeps pairing, provider credentials and local configuration across container replacement. Release images are also tagged with their CLI version, for example `ghcr.io/mcptoai/mcptoai:0.1.15`.
+The `mcptoai` named volume keeps pairing, provider credentials and local configuration across container replacement. Release images are also tagged with their CLI version, for example `ghcr.io/mcptoai/mcptoai:0.1.16`.
 
 ## Troubleshooting
 

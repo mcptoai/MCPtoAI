@@ -173,8 +173,8 @@ def test_relay_gonderim_hatasinda_olay_bekletilir():
     asyncio.run(run())
 
 
-def test_onay_suresi_varsayilan_iki_saat():
-    assert settings.approval_timeout_seconds == 7200
+def test_onay_suresi_varsayilan_on_bes_dakika():
+    assert settings.approval_timeout_seconds == 900
 
 
 # --- B1: web'e canlı görev durumu ----------------------------------------------
