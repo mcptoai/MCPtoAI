@@ -99,7 +99,7 @@ class Settings:
     max_cmd_timeout: int = field(default_factory=lambda: int(os.getenv("MAX_CMD_TIMEOUT","1800")))
     max_agent_steps: int = field(default_factory=lambda: int(os.getenv("MCPTOAI_MAX_STEPS","15")))
     # Onay bekleme süresi (sn). Uzun görevlerin ara adımlarında kullanıcı uzakta olabilir.
-    approval_timeout_seconds: int = field(default_factory=lambda: int(os.getenv("MCPTOAI_APPROVAL_TIMEOUT","7200")))
+    approval_timeout_seconds: int = field(default_factory=lambda: min(900, max(1, int(os.getenv("MCPTOAI_APPROVAL_TIMEOUT", "900")))))
     auth0_domain: str = PRODUCTION_AUTH0_DOMAIN
     auth0_device_client_id: str = PRODUCTION_AUTH0_DEVICE_CLIENT_ID
     auth0_audience: str = PRODUCTION_AUTH0_AUDIENCE
