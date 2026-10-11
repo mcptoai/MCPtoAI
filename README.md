@@ -6,6 +6,7 @@
 **Let the AI model you choose work with your own computer and MCP tools — under device-side control.**
 
 [![Website](https://img.shields.io/badge/Website-mcptoai.com-0ea5e9)](https://mcptoai.com)
+[![Slack Community](https://img.shields.io/badge/Slack-Join%20Community-4A154B?logo=slack&logoColor=white)](https://join.slack.com/t/mcptoai/shared_invite/zt-4cps79t7p-Ik8umooygVNUDGuCBc6WFg)
 [![Download](https://img.shields.io/badge/Download-macOS%20%7C%20Windows%20%7C%20Linux-2563eb)](https://mcptoai.com/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/Security-policy-7c3aed)](SECURITY.md)
@@ -13,7 +14,7 @@
 [![Package security](https://github.com/mcptoai/MCPtoAI/actions/workflows/package-security.yml/badge.svg)](https://github.com/mcptoai/MCPtoAI/actions/workflows/package-security.yml)
 [![Release](https://img.shields.io/github/v/release/mcptoai/MCPtoAI)](https://github.com/mcptoai/MCPtoAI/releases/latest)
 
-[Website](https://mcptoai.com) · [Web App](https://app.mcptoai.com) · [Downloads](https://mcptoai.com/downloads/) · [Demo](https://youtu.be/nAhHaHcHs1U)
+[Website](https://mcptoai.com) · [Slack Community](https://join.slack.com/t/mcptoai/shared_invite/zt-4cps79t7p-Ik8umooygVNUDGuCBc6WFg) · [Web App](https://app.mcptoai.com) · [Downloads](https://mcptoai.com/downloads/) · [Demo](https://youtu.be/nAhHaHcHs1U)
 
 </div>
 
@@ -208,6 +209,7 @@ For current installers and installation instructions, always use:
 
 ## Support and feedback
 
+- [Join the MCPtoAI Slack Community](https://join.slack.com/t/mcptoai/shared_invite/zt-4cps79t7p-Ik8umooygVNUDGuCBc6WFg) for setup help, questions and discussions.
 - Use **GitHub Issues** for reproducible bugs and feature requests.
 - Do **not** open public issues for suspected vulnerabilities; follow [SECURITY.md](SECURITY.md).
 - Product information and downloads are available at [mcptoai.com](https://mcptoai.com).
