@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
+
+from ..net import resilient_http_client
 
 from .base import AssistantTurn, Provider, ToolCall, ToolSpec
 
@@ -12,7 +14,7 @@ class AnthropicProvider(Provider):
 
     def __init__(self, api_key: str, model: str) -> None:
         super().__init__(api_key, model)
-        self.client = AsyncAnthropic(api_key=api_key)
+        self.client = AsyncAnthropic(api_key=api_key, http_client=resilient_http_client(DefaultAsyncHttpxClient))
 
     async def list_models(self) -> list[dict]:
         """Discover models available to this Anthropic API key via /v1/models."""
@@ -66,12 +68,12 @@ class AnthropicProvider(Provider):
     async def complete(self, system: str, messages: list[dict], tools: list[ToolSpec]) -> AssistantTurn:
         resp = await self.client.messages.create(
             model=self.model,
-            max_tokens=4096,
+            max_tokens=16000,  # düşünen modeller bütçeyi düşünmeye harcayıp metinsiz bitebiliyordu
             system=system,
             messages=self._convert(messages),
             tools=[{"name": t.name, "description": t.description, "input_schema": t.input_schema} for t in tools],
         )
-        turn = AssistantTurn()
+        turn = AssistantTurn(stop_reason=str(getattr(resp, "stop_reason", "") or ""))
         for block in resp.content:
             if block.type == "text":
                 turn.text += block.text

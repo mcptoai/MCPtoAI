@@ -59,6 +59,13 @@ codesign --verify --strict --verbose=2 "$BUNDLED_HELPER"
 codesign --verify --deep --strict --verbose=2 "$BUNDLED_AGENT_APP"
 codesign -dv --verbose=2 "$BUNDLED_AGENT" 2>&1 | grep -F "TeamIdentifier=WCUHC7RX92"
 codesign --verify --deep --strict --verbose=2 "$APP"
+# Notarize and staple the final app BEFORE creating the DMG.
+APP_ZIP="dist/MCPtoAI-${DESKTOP_VERSION}-arm64-app-notary.zip"
+ditto -c -k --keepParent "$APP" "$APP_ZIP"
+xcrun notarytool submit "$APP_ZIP" --keychain-profile "$PROFILE" --wait
+xcrun stapler staple "$APP"
+xcrun stapler validate "$APP"
+spctl --assess --type execute --verbose=4 "$APP"
 # Build the DMG only after final metadata and final app signature are complete.
 npx electron-builder --mac dmg --prepackaged "$APP" --config.mac.identity="$BUILDER_IDENTITY" --config.mac.hardenedRuntime=true
 # Sign the DMG itself so Gatekeeper can assess the distribution container.
@@ -68,4 +75,19 @@ xcrun stapler staple "$DMG"
 xcrun stapler validate "$DMG"
 spctl --assess --type execute --verbose=4 "$APP"
 spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
-shasum -a 256 "$DMG"
+# Produce the updater ZIP only after the DMG has its final stapled ticket.
+# electron-builder generates the matching ZIP blockmap from the final signed app.
+npx electron-builder --mac zip --prepackaged "$APP" --config.mac.identity="$BUILDER_IDENTITY" --config.mac.hardenedRuntime=true
+UPDATE_ZIP="dist/MCPtoAI-${DESKTOP_VERSION}-arm64.zip"
+UPDATE_BLOCKMAP="${UPDATE_ZIP}.blockmap"
+[[ -s "$UPDATE_ZIP" && -s "$UPDATE_BLOCKMAP" ]] || { print -u2 'Missing updater ZIP/blockmap'; exit 3; }
+# Verify the actual application inside the ZIP, not only the source app.
+ZIP_CHECK_DIR=$(mktemp -d "${TMPDIR:-/tmp/}mcptoai-zip-verify.XXXXXXXX")
+trap 'rm -rf "$ZIP_CHECK_DIR"' EXIT
+ditto -x -k "$UPDATE_ZIP" "$ZIP_CHECK_DIR"
+ZIP_APP="$ZIP_CHECK_DIR/MCPtoAI.app"
+[[ -d "$ZIP_APP" ]] || { print -u2 'Updater ZIP contains no MCPtoAI.app'; exit 3; }
+codesign --verify --deep --strict --verbose=2 "$ZIP_APP"
+xcrun stapler validate "$ZIP_APP"
+spctl --assess --type execute --verbose=4 "$ZIP_APP"
+shasum -a 256 "$DMG" "$UPDATE_ZIP" "$UPDATE_BLOCKMAP"

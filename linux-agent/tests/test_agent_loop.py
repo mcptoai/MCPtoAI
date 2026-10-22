@@ -62,7 +62,7 @@ def test_path_outside_roots(tmp_path: Path):
 
     asyncio.run(session.run("test", allow, emit))
     first = next(e for e in events if e["type"] == "tool_result")
-    assert "izin verilen klasörlerin dışında" in first["preview"]
+    assert "outside allowed workspace" in first["preview"]
 
 
 def test_high_risk_auto_is_forced_to_confirm(tmp_path: Path):
@@ -139,7 +139,7 @@ def test_symlink_escape_read_is_blocked(tmp_path):
     try:
         e = _run_one(tmp_path, ToolCall('1', 'read_file', {'path': str(link / secret.name)}))
         assert e['is_error'] or '[ERROR]' in e['preview']
-        assert 'izin verilen klasörlerin dışında' in e['preview']
+        assert 'outside allowed workspace' in e['preview']
     finally:
         _remove_dir_link(link)
         secret.unlink(missing_ok=True)

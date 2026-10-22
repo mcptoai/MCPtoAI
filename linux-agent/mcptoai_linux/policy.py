@@ -25,6 +25,7 @@ DEFAULT_RULES: dict[str, Decision] = {
     "docker_status": Decision.AUTO,
     "port_status": Decision.AUTO,
     "write_file": Decision.CONFIRM,
+    "send_artifact": Decision.CONFIRM,
     "open_app": Decision.CONFIRM,
     "capture_screen": Decision.CONFIRM,
     "open_url": Decision.CONFIRM,
@@ -46,7 +47,7 @@ DEFAULT_RULES: dict[str, Decision] = {
 # or cause an external side effect.  AUTO is never honored for them, even if
 # a stale/corrupt config file says otherwise.  A live user approval is required.
 FORCE_CONFIRM_TOOLS: frozenset[str] = frozenset({
-    "write_file", "open_app", "capture_screen", "capture_microphone",
+    "send_artifact", "write_file", "open_app", "capture_screen", "capture_microphone",
     "generate_image",
     "capture_camera", "open_url", "run_command", "run_in_project",
     "service_control", "docker_control",
@@ -81,7 +82,7 @@ class ToolPolicy:
         return approved, "user_approved" if approved else "user_denied"
 
 CAPABILITIES = {
- "files":{"label":"Files & Folders","tools":{"list_dir","read_file","find_files","write_file"},"default":Decision.CONFIRM},
+ "files":{"label":"Files & Folders","tools":{"list_dir","read_file","find_files","write_file","send_artifact"},"default":Decision.CONFIRM},
  "app_control":{"label":"App Control","tools":{"open_app"},"default":Decision.CONFIRM},
  "screen":{"label":"Screen Recording","tools":{"capture_screen"},"default":Decision.CONFIRM},
  "microphone":{"label":"Microphone","tools":{"capture_microphone"},"default":Decision.DENY},

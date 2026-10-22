@@ -158,7 +158,7 @@ class JobManager:
                      f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine"],
                     capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL).stdout
             else:
-                out = subprocess.run(["ps", "-o", "stat=,args=", "-p", str(int(pid))],
+                out = subprocess.run(["ps", "-ww", "-o", "stat=,args=", "-p", str(int(pid))],
                                      capture_output=True, text=True, timeout=10).stdout
                 if out.strip().startswith("Z"):
                     return False

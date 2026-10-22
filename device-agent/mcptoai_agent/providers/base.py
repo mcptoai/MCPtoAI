@@ -56,6 +56,7 @@ class ToolCall:
 class AssistantTurn:
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
+    stop_reason: str = ""  # 'max_tokens': yanıt çıktı sınırında kesildi (modelden bağımsız ad)
 
 
 class Provider(abc.ABC):

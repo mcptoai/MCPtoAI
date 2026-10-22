@@ -1,7 +1,8 @@
 """EVREN OpenAI-compatible Chat Completions adapter."""
 from __future__ import annotations
 from .openai_provider import OpenAIProvider
-from openai import AsyncOpenAI, InternalServerError, APITimeoutError
+from openai import AsyncOpenAI, DefaultAsyncHttpxClient, InternalServerError, APITimeoutError
+from ..net import resilient_http_client
 from httpx2 import ReadTimeout
 import logging
 import time
@@ -16,7 +17,7 @@ class EvrenProvider(OpenAIProvider):
     def __init__(self, api_key: str, model: str) -> None:
         super().__init__(api_key, model, EVREN_BASE_URL)
         # Fail fast on EVREN 503s; fallback below handles model failover.
-        self.client = AsyncOpenAI(api_key=api_key, base_url=EVREN_BASE_URL, max_retries=0, timeout=20.0)
+        self.client = AsyncOpenAI(api_key=api_key, base_url=EVREN_BASE_URL, max_retries=0, timeout=20.0, http_client=resilient_http_client(DefaultAsyncHttpxClient))
         self.last_model = model
         self._models_cache = []
         self._models_cache_at = 0.0

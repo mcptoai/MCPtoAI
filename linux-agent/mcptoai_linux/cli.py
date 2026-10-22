@@ -288,7 +288,7 @@ def cmd_workspace(a) -> None:
 # --- API anahtarları -----------------------------------------------------------
 
 def cmd_keys(a) -> None:
-    from .secret_store import api_key_name, backend_name, delete_secret, get_secret, set_secret
+    from .secret_store import api_key_name, backend_name, delete_secret, get_secret, sanitize_api_key, set_secret
     providers = _chat_providers()
     if a.action == "list":
         for pid, info in providers.items():
@@ -311,7 +311,10 @@ def cmd_keys(a) -> None:
         key = getpass.getpass(f"{providers[a.provider]['name']} API key: ")
     else:
         key = sys.stdin.readline()
-    key = key.strip()
+    raw = key.strip()
+    key = sanitize_api_key(key)
+    if key != raw:
+        print("Removed terminal control characters or spaces from the pasted key (a terminal paste can add escape sequences).", file=sys.stderr)
     if not key:
         raise SystemExit("Empty key, nothing saved.")
     set_secret(api_key_name(a.provider), key)

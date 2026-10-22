@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,20 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 
 from vault_backends import MemoryBackend, block_real_keyring  # noqa: E402
+
+
+def pytest_configure(config):
+    """Windows'ta pytest dosyalarını korumalı AppData dışında tutar."""
+    if sys.platform == "win32":
+        root = Path(__file__).resolve().parents[1]
+        if config.option.basetemp is None:
+            # TEMP/TMP'yi değiştirme; yalnızca pytest'in tmp_path kökünü belirle.
+            config.option.basetemp = str(root / ".pytest-tmp")
+        # Bazı unittest testleri pytest tmp_path yerine TemporaryDirectory kullanır.
+        # Onların varsayılan kökünü de AppData dışında tut (ortamı değiştirmeden).
+        unittest_root = root / ".pytest-unittest-tmp"
+        unittest_root.mkdir(exist_ok=True)
+        tempfile.tempdir = str(unittest_root)
 
 
 @pytest.fixture(autouse=True)

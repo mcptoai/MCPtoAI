@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from pathlib import Path
 
 from mcptoai_agent.secret_store import CredentialBackendError
@@ -47,6 +48,18 @@ class MemoryBackend:
             return self.data.pop(account, None) is not None
 
 
+def _retry_windows_file_lock(operation):
+    """Windows test dosyası kilidinde kısa yeniden deneme yapar (ürün kodu değil)."""
+    for attempt in range(10):
+        try:
+            return operation()
+        except PermissionError as exc:
+            # Yalnızca paylaşım kilidi (WinError 32) için tekrar dene.
+            if os.name != "nt" or getattr(exc, "winerror", None) != 32 or attempt == 9:
+                raise
+            time.sleep(0.05)
+
+
 class FileBackend:
     """Süreçler arası paylaşılan sahte backend (her hesap bir dosya).
 
@@ -70,16 +83,16 @@ class FileBackend:
     def set(self, account: str, value: str) -> None:
         p = self._p(account)
         try:
-            p.unlink()
+            _retry_windows_file_lock(p.unlink)
         except FileNotFoundError:
             pass
         tmp = p.with_suffix(f".tmp{os.getpid()}.{threading.get_ident()}")
         tmp.write_text(value, encoding="utf-8")
-        os.replace(tmp, p)
+        _retry_windows_file_lock(lambda: os.replace(tmp, p))
 
     def delete(self, account: str) -> bool:
         try:
-            self._p(account).unlink()
+            _retry_windows_file_lock(self._p(account).unlink)
             return True
         except FileNotFoundError:
             return False

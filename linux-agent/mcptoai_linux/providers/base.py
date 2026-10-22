@@ -48,6 +48,7 @@ class ToolCall:
 @dataclass
 class AssistantTurn:
     text: str = ""
+    stop_reason: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
 
 

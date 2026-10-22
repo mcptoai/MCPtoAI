@@ -635,7 +635,7 @@ class RelayClient:
         if session is None:
             provider=make_provider(provider_cfg)
             provider.model=requested_model
-            session=self.sessions[session_key]=AgentSession(provider_cfg,provider,build_server(provider_cfg),policy=__import__("mcptoai_linux.policy",fromlist=["ToolPolicy"]).ToolPolicy(rules={**load_rules(),**{name:__import__("mcptoai_linux.policy",fromlist=["Decision"]).Decision((self._remote_tool_map[name][0].get("tools") or {}).get(self._remote_tool_map[name][1],"confirm")) for name in self._remote_tool_specs}}),remote_tools=list(self._remote_tool_specs.values()),remote_caller=self._call_remote_tool,server_aliases=self._server_aliases())
+            session=self.sessions[session_key]=AgentSession(provider_cfg,provider,build_server(provider_cfg, artifact_session_id=sid),policy=__import__("mcptoai_linux.policy",fromlist=["ToolPolicy"]).ToolPolicy(rules={**load_rules(),**{name:__import__("mcptoai_linux.policy",fromlist=["Decision"]).Decision((self._remote_tool_map[name][0].get("tools") or {}).get(self._remote_tool_map[name][1],"confirm")) for name in self._remote_tool_specs}}),remote_tools=list(self._remote_tool_specs.values()),remote_caller=self._call_remote_tool,server_aliases=self._server_aliases())
         self._session_last_used[session_key]=now
         # Images are data URLs; keep decoded payload bounded even if transport limits change.
         total_image_chars=0

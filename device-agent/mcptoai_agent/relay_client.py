@@ -664,7 +664,7 @@ class RelayClient:
         if session is None:
             provider=make_provider(provider_cfg)
             provider.model=requested_model
-            session=self.sessions[session_key]=AgentSession(provider_cfg,provider,build_server(provider_cfg),policy=ToolPolicy(rules={**load_rules(),**{name:Decision((self._remote_tool_map[name][0].get("tools") or {}).get(self._remote_tool_map[name][1],"confirm")) for name in self._remote_tool_specs}}),remote_tools=list(self._remote_tool_specs.values()),remote_caller=self._call_remote_tool,server_aliases=self._server_aliases())
+            session=self.sessions[session_key]=AgentSession(provider_cfg,provider,build_server(provider_cfg, artifact_session_id=sid),policy=ToolPolicy(rules={**load_rules(),**{name:Decision((self._remote_tool_map[name][0].get("tools") or {}).get(self._remote_tool_map[name][1],"confirm")) for name in self._remote_tool_specs}}),remote_tools=list(self._remote_tool_specs.values()),remote_caller=self._call_remote_tool,server_aliases=self._server_aliases())
         self._session_last_used[session_key]=now
         # Images are data URLs; keep decoded payload bounded even if transport limits change.
         total_image_chars=0
@@ -701,7 +701,12 @@ class RelayClient:
         async def emit(event): await self._send_event(sid,event,turn_id=turn_id)
         async def approver(tool,args):
             aid=str(uuid.uuid4()); fut=asyncio.get_running_loop().create_future(); self.pending_approvals[aid]=(fut,sid)
-            await self._send_event(sid,{"type":"approval_required","approval_id":aid,"tool":tool,"arguments":args},turn_id=turn_id)
+            event={"type":"approval_required","approval_id":aid,"tool":tool,"arguments":args}
+            try:
+                from . import skills as _skills
+                if _skills.ACTIVE.get(): event["skills"]=list(_skills.ACTIVE.get())  # onay kartı ve günlük skill adını taşır
+            except Exception: pass
+            await self._send_event(sid,event,turn_id=turn_id)
             outcome = "expired"
             try:
                 allowed = await asyncio.wait_for(fut,timeout=self.cfg.approval_timeout_seconds)

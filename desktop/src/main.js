@@ -18,6 +18,31 @@ async function autoUpgradeDeviceAgent(){if(process.platform!=='darwin')return up
 const configPath=path.join(configRoot,'mcp-tools.json');
 function readConfig(){try{return JSON.parse(fs.readFileSync(configPath,'utf8'))}catch{return {version:2,tools:{},servers:[]}}}
 function writeConfig(data){fs.mkdirSync(path.dirname(configPath),{recursive:true});const tmp=configPath+'.tmp';fs.writeFileSync(tmp,JSON.stringify(data,null,2),{mode:0o600});fs.renameSync(tmp,configPath)}
+// Skills işlemleri yalnızca Desktop kullanıcı eyleminden başlatılır; model araçlarına açılmaz.
+function skillCli(args,timeout=180000){
+  // Uzun GitHub işlemleri Electron ana iş parçacığını bloke etmez.
+  return new Promise(resolve=>{
+    let a;try{a=agentExecutable()}catch(e){return resolve({ok:false,error:e.message})}
+    const {execFile}=require('child_process');
+    execFile(a.cmd,[...a.prefix,'skills',...args],{cwd:a.cwd,encoding:'utf8',timeout,maxBuffer:4*1024*1024},(error,stdout,stderr)=>{
+      if(error)return resolve({ok:false,error:String(stderr||error.message||stdout||'Skill operation failed').trim().slice(-1200)});
+      try{resolve({ok:true,data:JSON.parse(stdout)})}catch{resolve({ok:true,message:stdout.trim()})}
+    });
+  });
+}
+ipcMain.handle('skills:list',()=>skillCli(['list'],15000));
+ipcMain.handle('skills:inspect',(_,v)=>{
+  const source=String(v?.source||'').trim(),packageName=String(v?.package||'').trim(),commit=String(v?.commit||'').trim();
+  if(!/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\/?$/.test(source)||! /^[a-z0-9][a-z0-9-]{0,63}$/.test(packageName)||! /^[a-f0-9]{40}$/.test(commit))return {ok:false,error:'GitHub URL, lowercase package name and full 40-character commit SHA are required.'};
+  return skillCli(['inspect',source,'--package',packageName,'--commit',commit]);
+});
+ipcMain.handle('skills:install',(_,v)=>{
+  const source=String(v?.source||'').trim(),packageName=String(v?.package||'').trim(),commit=String(v?.commit||'').trim(),digest=String(v?.digest||'').trim();
+  if(!/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\/?$/.test(source)||! /^[a-z0-9][a-z0-9-]{0,63}$/.test(packageName)||! /^[a-f0-9]{40}$/.test(commit)||! /^[a-f0-9]{64}$/.test(digest))return {ok:false,error:'Invalid approved package details'};
+  return skillCli(['add',source,'--package',packageName,'--commit',commit,'--expected-digest',digest,'--approve']);
+});
+ipcMain.handle('skills:enabled',(_,name,enabled)=>/^[a-z0-9][a-z0-9-]{0,63}$/.test(String(name))?skillCli([enabled?'enable':'disable',name],15000):{ok:false,error:'Invalid skill name'});
+ipcMain.handle('skills:remove',(_,packageName)=>/^[a-z0-9][a-z0-9-]{0,63}$/.test(String(packageName))?skillCli(['remove',packageName],15000):{ok:false,error:'Invalid package name'});
 ipcMain.handle('config:get',()=>{const c=readConfig();const toolDefaults={list_dir:'confirm',read_file:'confirm',find_files:'confirm',disk_usage:'auto',running_processes:'auto',write_file:'confirm',open_app:'confirm',capture_screen:'confirm',open_url:'confirm',web_fetch:'auto',generate_image:'confirm',run_command:'confirm',run_in_project:'confirm'};c.tools={...toolDefaults,...(c.tools||{})};const capDefaults={files:'confirm',app_control:'confirm',screen:'confirm',microphone:'deny',camera:'deny'};c.capabilities={...capDefaults,...(c.capabilities||{})};try{const d=JSON.parse(fs.readFileSync(path.join(path.dirname(configPath),'mcp-discovery.json'),'utf8'));c.discovery=d.servers||{}}catch{c.discovery={}}return c});
 ipcMain.handle('capability:request-os',(_,name)=>{try{if(process.platform==='win32'){if(name==='microphone'||name==='camera'){shell.openExternal(name==='microphone'?'ms-settings:privacy-microphone':'ms-settings:privacy-webcam');return {ok:true,status:'managed'}}return {ok:true,status:'not-required'}}if(process.platform!=='darwin')return {ok:true,status:'not-required'};if(name==='screen'){const a=agentExecutable(),r=spawnSync(a.cmd,[...a.prefix,'permission','request','screen'],{cwd:a.cwd,encoding:'utf8',timeout:30000});const status=(r.stdout||'').trim();return {ok:status==='granted',status,error:(r.stderr||'').trim()}}if(name==='app_control'){const {systemPreferences}=require('electron');const ok=systemPreferences.isTrustedAccessibilityClient(true);return {ok,status:ok?'granted':'not-granted'}}if(name==='files'){shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders');return {ok:true,status:'managed'}}if(name==='microphone'||name==='camera'){const helper=process.platform==='darwin'&&app.isPackaged?path.join(process.resourcesPath,'..','Library','LoginItems','MCPtoAI Device Agent.app','Contents','Resources','permission-helper'):path.join(os.homedir(),'Applications','MCPtoAI Device Agent.app','Contents','Resources','permission-helper');if(!fs.existsSync(helper))return {ok:false,status:'helper-missing',error:'Install / Repair the Device Agent first.'};const r=spawnSync(helper,['request',name],{encoding:'utf8',timeout:65000});const status=(r.stdout||'').trim();return {ok:status==='granted',status,error:(r.stderr||'').trim()}}return {ok:true,status:'not-required'}}catch(e){return {ok:false,status:'error',error:e.message}}});
 ipcMain.handle('config:capability-permission',(_,name,permission)=>{const allowed=['files','app_control','screen','microphone','camera'];if(!allowed.includes(name)||!['auto','confirm','deny'].includes(permission))return {ok:false};const c=readConfig();c.capabilities={...(c.capabilities||{}),[name]:permission};const maps={files:['list_dir','read_file','find_files','write_file'],app_control:['open_app'],screen:['capture_screen'],microphone:['capture_microphone'],camera:['capture_camera']};c.tools={...(c.tools||{})};for(const t of maps[name])c.tools[t]=permission;writeConfig(c);return {ok:true}});
@@ -71,7 +96,20 @@ function writeSettings(v){fs.mkdirSync(path.dirname(settingsPath),{recursive:tru
 ipcMain.handle('history:storage-get',()=>{const c=readSettings(),provider=['mcptoai','local'].includes(c.history_provider)?c.history_provider:'mcptoai';return {provider,options:[{id:'mcptoai',label:'MCPtoAI Cloud',available:true},{id:'local',label:'This device only',available:true},{id:'remote',label:'My own server',available:false,coming_soon:true,enterprise:true}]}});
 ipcMain.handle('history:storage-set',(_,provider)=>{provider=String(provider||'').trim().toLowerCase();if(!['mcptoai','local'].includes(provider))return {ok:false,error:'Unsupported history storage provider'};const c=readSettings();c.history_provider=provider;writeSettings(c);return {ok:true,provider}});
 ipcMain.handle('workspace:get',()=>{const c=readSettings();const chosen=String(c.workspace_root||'').trim();return {path:chosen||'',configured:!!chosen,defaults:chosen?[]:[path.join(os.homedir(),'Desktop'),path.join(os.homedir(),'Documents'),path.join(os.homedir(),'Downloads')]};});
-ipcMain.handle('workspace:choose',async()=>{const r=await dialog.showOpenDialog({title:'Choose MCPtoAI workspace',properties:['openDirectory','createDirectory']});if(r.canceled||!r.filePaths[0])return {ok:false,canceled:true};let selected;try{selected=fs.realpathSync(r.filePaths[0]);if(!fs.statSync(selected).isDirectory())return {ok:false,error:'Selected path is not a folder.'}}catch(e){return {ok:false,error:e.message}}const c=readSettings();c.workspace_root=selected;writeSettings(c);await platform.restart();return {ok:true,path:selected};});
+ipcMain.handle('workspace:choose',async()=>{const r=await dialog.showOpenDialog({title:'Choose MCPtoAI workspace',properties:['openDirectory','createDirectory']});if(r.canceled||!r.filePaths[0])return {ok:false,canceled:true};let selected;try{selected=fs.realpathSync(r.filePaths[0]);if(!fs.statSync(selected).isDirectory())return {ok:false,error:'Selected path is not a folder.'}}catch(e){return {ok:false,error:e.message}}// Agent'ın kendi veri dizini çalışma alanından erişilebilir olmamalıdır.
+const ownDirectories=[
+  path.join(os.homedir(),'.config','mcptoai'),
+  path.join(os.homedir(),'Library','Application Support','MCPtoAI'),
+  path.join(os.homedir(),'Library','Application Support','mcptoai-desktop'),
+  path.join(process.env.APPDATA||path.join(os.homedir(),'AppData','Roaming'),'MCPtoAI'),
+  path.join(process.env.LOCALAPPDATA||path.join(os.homedir(),'AppData','Local'),'MCPtoAI')
+];
+const norm=v=>path.resolve(v).toLowerCase();
+const selectedNorm=norm(selected);
+if(ownDirectories.some(dir=>{const protectedDir=norm(dir);return protectedDir===selectedNorm||protectedDir.startsWith(selectedNorm+path.sep)})){
+  return {ok:false,error:'Protected folders stay blocked. Choose a narrower workspace.'};
+}
+const c=readSettings();c.workspace_root=selected;writeSettings(c);await platform.restart();return {ok:true,path:selected,warning:'Protected folders stay blocked'};});
 function installedAgentPath(){if(process.platform==='darwin')return app.isPackaged?path.join(process.resourcesPath,'..','Library','LoginItems','MCPtoAI Device Agent.app','Contents','Resources','agent','mcptoai-agent'):path.join(os.homedir(),'Applications','MCPtoAI Device Agent.app','Contents','Resources','agent','mcptoai-agent');if(process.platform==='win32')return path.join(process.env.LOCALAPPDATA||path.join(os.homedir(),'AppData','Local'),'MCPtoAI','Agent','mcptoai-agent.exe');return ''}
 function agentExecutable(){if(!app.isPackaged){const root=path.resolve(__dirname,'..','..'),agentDir=path.join(root,'device-agent'),py=process.platform==='win32'?path.join(agentDir,'.venv','Scripts','python.exe'):path.join(agentDir,'.venv','bin','python');if(fs.existsSync(py))return {cmd:py,prefix:['-m','mcptoai_agent'],cwd:agentDir}}const installed=installedAgentPath();if(installed&&fs.existsSync(installed))return {cmd:installed,prefix:[],cwd:path.dirname(installed)};const bundled=path.join(process.resourcesPath,'agent',process.platform==='win32'?'mcptoai-agent.exe':'mcptoai-agent');if(fs.existsSync(bundled))return {cmd:bundled,prefix:[],cwd:path.dirname(bundled)};throw new Error('Bundled MCPtoAI agent is unavailable. Use Install / Repair.')}
 ipcMain.handle('provider:detect-local',async()=>{const targets=[{id:'ollama',url:'http://127.0.0.1:11434/v1/models'},{id:'lmstudio',url:'http://127.0.0.1:1234/v1/models'}];return Promise.all(targets.map(async t=>{const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),1200);try{const r=await fetch(t.url,{signal:ctrl.signal});if(!r.ok)return {id:t.id,running:false};const d=await r.json();return {id:t.id,running:true,models:Array.isArray(d.data)?d.data.map(x=>x.id).filter(Boolean):[]}}catch{return {id:t.id,running:false,models:[]}}finally{clearTimeout(timer)}}))});

@@ -215,10 +215,18 @@ def test_canlilik_kontrolu_onbelleklenir(cfg, monkeypatch):
     mgr.stop(job["id"])
 
 
-def test_relay_anlik_goruntu_sadece_degisenler_ve_web_durdur(cfg, monkeypatch):
+def test_relay_anlik_goruntu_sadece_degisenler_ve_web_durdur(cfg, monkeypatch, request):
     from mcptoai_agent import relay_client as rc
     mgr = jobs_mod._default
     long = mgr.start(f'{PY} -c "import time;time.sleep(60)"', name="uzun")
+    started = {}
+
+    def _cleanup():  # test düşse bile uzun süren süreçler arkada kalmaz
+        for job in (long, started):
+            if job.get("id"):
+                try: mgr.stop(job["id"])
+                except Exception: pass
+    request.addfinalizer(_cleanup)
 
     async def run():
         client = rc.RelayClient(settings)
@@ -233,7 +241,9 @@ def test_relay_anlik_goruntu_sadece_degisenler_ve_web_durdur(cfg, monkeypatch):
         async def fake_sleep(_):
             ticks["n"] += 1
             if ticks["n"] == 2:
-                mgr.start(f'{PY} -c "print(2)"', name="yeni")
+                # Durum değiştirmeyen (uzun süren) görev. print(2) gibi hemen biten bir görev, makine hızına bağlı
+                # olarak iki kez bildirilirdi (önce running, sonra finished) ve test aralıklı düşerdi.
+                started.update(mgr.start(f'{PY} -c "import time;time.sleep(60)"', name="yeni"))
             if ticks["n"] > 3:
                 raise asyncio.CancelledError
             await real_sleep(0)

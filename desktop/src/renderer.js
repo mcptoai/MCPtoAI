@@ -1,5 +1,5 @@
 const tr=k=>window.I18N?.t(k)||k;
-const $=s=>document.querySelector(s);async function refresh(){const s=await window.mcp.status();$('#agentState').textContent=s.running?tr('agentRunning'):tr('agentStopped');$('#agentDetail').textContent=s.detail;$('#dot').className=s.running?'on':''}async function init(){const i=await window.mcp.info();$('#platform').textContent=`${i.platform} · ${i.arch}`;$('#version').textContent=`v${i.version}`;await refresh();await refreshDiagnosticLogs()}init();$('#repairAgent').onclick=async()=>{const r=await window.mcp.installAgent();if(!r.ok)showInfo(tr('installFailed'),r.error||'Unknown error');else{showInfo(tr('agentReady'),tr('agentReadyBody'));setTimeout(refresh,500)}};['start','restart','stop'].forEach(a=>$('#'+a).onclick=async()=>{const b=$('#'+a),oldText=b.textContent;b.disabled=true;b.textContent=a==='restart'?'Restarting…':a==='stop'?'Stopping…':'Starting…';try{const r=await window.mcp.action(a);if(!r?.ok)showInfo('Agent action failed',r?.stderr||r?.error||`Could not ${a} the Device Agent.`);await new Promise(x=>setTimeout(x,700));await refresh()}finally{b.disabled=false;b.textContent=oldText}});$('#openWeb').onclick=()=>window.mcp.openWeb();let activeLogTab='agent';async function refreshDiagnosticLogs(){const b=$('#refreshLogs');if(b){b.disabled=true;b.textContent='Refreshing…'}try{$('#logs').textContent=await window.mcp.logs(activeLogTab);$('#logsRefreshed').textContent=`Last refreshed ${new Date().toLocaleTimeString()}`}finally{if(b){b.disabled=false;b.textContent=tr('refresh')}}}$('#refreshLogs').onclick=refreshDiagnosticLogs;document.querySelectorAll('[data-log-tab]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-log-tab]').forEach(x=>x.classList.toggle('active',x===b));activeLogTab=b.dataset.logTab;refreshDiagnosticLogs()});document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button,.view').forEach(x=>x.classList.remove('active'));b.classList.add('active');$('#'+b.dataset.view).classList.add('active');$('#title').textContent=b.textContent;if(b.dataset.view==='diagnostics')refreshDiagnosticLogs();if(b.dataset.view==='mcps')renderConfig();if(b.dataset.view==='providers')renderProviders()})
+const $=s=>document.querySelector(s);async function refresh(){const s=await window.mcp.status();$('#agentState').textContent=s.running?tr('agentRunning'):tr('agentStopped');$('#agentDetail').textContent=s.detail;$('#dot').className=s.running?'on':''}async function init(){const i=await window.mcp.info();$('#platform').textContent=`${i.platform} · ${i.arch}`;$('#version').textContent=`v${i.version}`;await refresh();await refreshDiagnosticLogs()}init();$('#repairAgent').onclick=async()=>{const r=await window.mcp.installAgent();if(!r.ok)showInfo(tr('installFailed'),r.error||'Unknown error');else{showInfo(tr('agentReady'),tr('agentReadyBody'));setTimeout(refresh,500)}};['start','restart','stop'].forEach(a=>$('#'+a).onclick=async()=>{const b=$('#'+a),oldText=b.textContent;b.disabled=true;b.textContent=a==='restart'?'Restarting…':a==='stop'?'Stopping…':'Starting…';try{const r=await window.mcp.action(a);if(!r?.ok)showInfo('Agent action failed',r?.stderr||r?.error||`Could not ${a} the Device Agent.`);await new Promise(x=>setTimeout(x,700));await refresh()}finally{b.disabled=false;b.textContent=oldText}});$('#openWeb').onclick=()=>window.mcp.openWeb();let activeLogTab='agent';async function refreshDiagnosticLogs(){const b=$('#refreshLogs');if(b){b.disabled=true;b.textContent='Refreshing…'}try{$('#logs').textContent=await window.mcp.logs(activeLogTab);$('#logsRefreshed').textContent=`Last refreshed ${new Date().toLocaleTimeString()}`}finally{if(b){b.disabled=false;b.textContent=tr('refresh')}}}$('#refreshLogs').onclick=refreshDiagnosticLogs;document.querySelectorAll('[data-log-tab]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-log-tab]').forEach(x=>x.classList.toggle('active',x===b));activeLogTab=b.dataset.logTab;refreshDiagnosticLogs()});document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button,.view').forEach(x=>x.classList.remove('active'));b.classList.add('active');$('#'+b.dataset.view).classList.add('active');$('#title').textContent=b.textContent;if(b.dataset.view==='diagnostics')refreshDiagnosticLogs();if(b.dataset.view==='mcps')renderConfig();if(b.dataset.view==='providers')renderProviders();if(b.dataset.view==='skills')renderSkills()})
 
 const labels={get auto(){return tr('allow')},get confirm(){return tr('ask')},get deny(){return tr('off')}};
 function permControl(name,current,onSet){const d=document.createElement('div');d.className='seg';['deny','confirm','auto'].forEach(p=>{const b=document.createElement('button');b.textContent=labels[p];b.className=(current===p?'active ':'')+p;b.onclick=async()=>{await onSet(p);await window.mcp.action('restart');await renderConfig();setTimeout(refresh,400)};d.appendChild(b)});return d}
@@ -137,9 +137,77 @@ addEventListener('resize',()=>{if(innerWidth>720)closeMobileNav();updateCloudBot
 })();
 
 async function refreshWorkspace(){const w=await window.mcp.workspace();const el=$('#workspacePath');if(!el)return;el.textContent=w.configured?w.path:tr('workspaceDefaultLead')}
-$('#chooseWorkspace').onclick=async()=>{const r=await window.mcp.chooseWorkspace();if(r?.ok){await refreshWorkspace();showInfo(tr('workspaceUpdated'),tr('workspaceUpdatedLead'))}};
+$('#chooseWorkspace').onclick=async()=>{const r=await window.mcp.chooseWorkspace();if(r?.ok){await refreshWorkspace();showInfo(tr('workspaceUpdated'),'Protected folders stay blocked')}else if(r&&!r.canceled){showInfo('Workspace',r.error||'Unable to select workspace')}};
 refreshWorkspace();
 
 // Terminal komutları: yalnızca bu cihazdan açılabilen yerel izin (web değiştiremez). Açıkken de
 // her komut ve görev ayrıca onay ister.
-async function renderTerminalState(el){let st={enabled:false};try{st=await window.mcp.shellAccess()}catch{}el.textContent=st.enabled?'✓ Enabled':'Enable';el.onclick=()=>{if(st.enabled){showConfirm('Turn off terminal commands? The AI will no longer be able to run commands or start background jobs on this computer. Jobs that are already running keep running.',async()=>{await window.mcp.setShellAccess(false);await renderConfig()})}else{showConfirm('Allow the AI to run terminal commands and long-running background jobs on this computer? Every command and every job still asks for your approval. This setting can only be changed on this computer.',async()=>{const r=await window.mcp.setShellAccess(true);if(!r||!r.ok)showInfo('Terminal commands',(r&&r.error)||'Could not enable terminal commands.');await renderConfig()})}}}
+async function renderTerminalState(el){let st={enabled:false};try{st=await window.mcp.shellAccess()}catch{}el.textContent=st.enabled?'✓ Enabled':'Enable';el.onclick=()=>{if(st.enabled){showConfirm('Turn off terminal commands? The AI will no longer be able to run commands or start background jobs on this computer. Jobs that are already running keep running.',async()=>{await window.mcp.setShellAccess(false);await renderConfig()})}else{showConfirm('Allow the AI to run terminal commands and long-running background jobs on this computer? Every command and every job still asks for your approval. This setting can only be changed on this computer. Terminal commands can access anything your OS account can; approval cards are the only barrier.',async()=>{const r=await window.mcp.setShellAccess(true);if(!r||!r.ok)showInfo('Terminal commands',(r&&r.error)||'Could not enable terminal commands.');await renderConfig()})}}}
+
+// Skill önizlemesi ile kurulum onayı birbirinden ayrı kullanıcı eylemleridir.
+let reviewedSkill=null;
+async function renderSkills(){
+  const box=$('#installedSkills');if(!box)return;
+  const r=await window.mcp.skillsList();box.replaceChildren();
+  if(!r.ok){box.textContent=r.error||'Unable to load skills';return}
+  const entries=Object.entries(r.data||{});
+  if(!entries.length){box.textContent='No skills installed.';return}
+  const packages=new Map();
+  for(const [name,item] of entries){
+    const packageName=item.package||'';
+    if(!packages.has(packageName))packages.set(packageName,[]);
+    packages.get(packageName).push([name,item]);
+  }
+  for(const [packageName,skills] of packages){
+    const group=document.createElement('div');group.className='mcp-server';
+    const head=document.createElement('div');head.className='mcp-server-head';
+    const heading=document.createElement('h3');heading.textContent=`Package: ${packageName||'Unknown'}`;
+    const remove=document.createElement('button');remove.textContent='Remove package';
+    remove.disabled=!packageName;
+    remove.onclick=()=>showConfirm(`Remove package ${packageName} and all its skills (${skills.map(([name])=>name).join(', ')})?`,async()=>{
+      const result=await window.mcp.skillsRemove(packageName);
+      if(!result.ok){showInfo('Package removal failed',result.error||'Could not remove package');return}
+      await renderSkills();
+    });
+    head.append(heading,remove);group.append(head);
+    for(const [name,item] of skills){
+      const row=document.createElement('div');row.className='permission-row';
+      const info=document.createElement('div'),title=document.createElement('b'),desc=document.createElement('small');
+      title.textContent=name;desc.textContent=item.description||'';info.append(title,desc);
+      const toggle=document.createElement('button');toggle.textContent=item.enabled?'Disable':'Enable';
+      toggle.onclick=async()=>{const result=await window.mcp.skillsEnabled(name,!item.enabled);if(!result.ok)showInfo('Skill update failed',result.error);await renderSkills()};
+      row.append(info,toggle);group.append(row);
+    }
+    box.append(group);
+  }
+}
+$('#refreshSkills').onclick=renderSkills;
+for(const id of ['skillSource','skillPackage','skillCommit'])$('#'+id).addEventListener('input',()=>{reviewedSkill=null;$('#skillPreview').classList.add('hidden')});
+$('#inspectSkill').onclick=async()=>{
+  reviewedSkill=null;$('#skillPreview').classList.add('hidden');$('#skillError').textContent='';
+  const request={source:$('#skillSource').value.trim(),package:$('#skillPackage').value.trim(),commit:$('#skillCommit').value.trim()};
+  const button=$('#inspectSkill');button.disabled=true;button.textContent='Inspecting…';
+  try{const r=await window.mcp.skillsInspect(request);if(!r.ok){$('#skillError').textContent=r.error;return}
+    const data=r.data;const kinds={'skill-package':'SKILL.md package','mcp-server-candidate':'MCP server candidate','application-or-cli-candidate':'CLI or application candidate','unknown':'Unrecognized repository'};
+    $('#skillClassification').textContent=`Detected: ${kinds[data.kind]||'Unrecognized repository'} · ${data.supported?'Supported':'Not supported'} · User approval required · Install folder: ${data.skill_root||'Not found'} · Ignored folders: ${(data.ignored_skill_folders||[]).join(', ')||'None'}`;
+    const details=$('#skillDetails');details.replaceChildren();
+    for(const [name,item] of Object.entries(data.preview?.skills||{})){
+      const section=document.createElement('div'),heading=document.createElement('h4'),description=document.createElement('p'),scripts=document.createElement('p');
+      heading.textContent=name;description.textContent=item.description||'No description';
+      scripts.textContent=`Scripts: ${Object.keys(item.scripts||{}).join(', ')||'None'}`;
+      section.append(heading,description,scripts);details.append(section);
+    }
+    const commitUrl=new URL(request.source.replace(/\.git\/?$/,'').replace(/\/$/,'')+'/commit/'+request.commit);
+    $('#skillCommitLink').href=commitUrl.href;
+    $('#skillFileList').textContent=(data.preview?.files||[]).map(f=>`${f.sha256}  ${f.path}`).join('\n')||data.reason||'No compatible skills found';
+    reviewedSkill=data.installable?{...request,digest:data.preview_digest}:null;
+    $('#installSkill').disabled=!reviewedSkill;$('#skillPreview').classList.remove('hidden');
+  }finally{button.disabled=false;button.textContent='Inspect repository'}
+};
+$('#installSkill').onclick=async()=>{
+  if(!reviewedSkill)return;
+  const approved={...reviewedSkill};reviewedSkill=null;$('#installSkill').disabled=true;
+  const r=await window.mcp.skillsInstall(approved);
+  if(!r.ok){$('#skillError').textContent=r.error||'Installation failed';return}
+  $('#skillPreview').classList.add('hidden');showInfo('Skills installed','Package installed after file hash verification.');await renderSkills();
+};
