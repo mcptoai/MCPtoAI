@@ -39,7 +39,7 @@ With MCPtoAI you can:
 - work with files inside the locations you allow;
 - run terminal commands when terminal access is enabled;
 - connect MCP servers and use their tools in the same workflow;
-- switch AI providers without starting a new conversation;
+- switch AI providers and models within the same conversation while retaining available chat context;
 - keep provider credentials on your own device;
 - choose whether conversation history is stored in MCPtoAI Cloud or only on the selected device;
 - use the web app from another browser or phone while the paired device stays in control of local actions.
@@ -105,6 +105,16 @@ Open **MCPtoAI Desktop → Skills**, enter a GitHub repository URL, package name
 - **Skills** are separately reviewed instruction or script packages installed from supported GitHub sources. They do not automatically grant new device permissions.
 
 </details>
+
+## Switch AI models without losing the conversation
+
+**One conversation, multiple models.** You can change the selected AI provider or model during an existing chat without starting over. The next model receives the available conversation context, so you can continue the same task, ask follow-up questions or get a second model's perspective in the same thread.
+
+**Conversation continuity with a bounded context budget.** Rather than blindly sending an unlimited transcript with every request, MCPtoAI Web prepares recent conversation context using a size budget. The current web client retains at least the eight most recent eligible messages and works backward through earlier messages up to an approximate **24,000-token context budget** (estimated from text length, not exact provider tokenization). The Device Agent also supports restoring prior conversation context when a session is resumed.
+
+This is designed to **reduce unnecessary context transmission and token usage while preserving useful recent history**. It is not a guarantee of the fewest possible tokens or perfect recall: very long conversations may exceed the context window, older details may be omitted, and actual token counts and costs depend on the model, provider, tool results and conversation content.
+
+> **Try it:** Start a task with one model, switch to another model in the same chat, and ask it to continue from the previous answer. You do not need to copy and paste the conversation into a new thread.
 
 ## Choose your model. Choose where your data lives.
 
