@@ -69,7 +69,21 @@ jobs:
             echo "Tag already exists"; exit 1
           fi
           gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/v$RELEASE_VERSION" -f sha="${GITHUB_SHA}"
+      - name: Check for existing GitHub Release
+        id: existing_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$RELEASE_VERSION"
+          if gh release view "v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "GitHub Release v$version already exists; skipping creation."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Publish GitHub Release
+        if: steps.existing_release.outputs.exists != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
