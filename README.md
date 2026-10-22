@@ -39,7 +39,7 @@ With MCPtoAI you can:
 - work with files inside the locations you allow;
 - run terminal commands when terminal access is enabled;
 - connect MCP servers and use their tools in the same workflow;
-- switch AI providers without starting a new conversation;
+- switch AI providers and models within the same conversation while retaining available chat context;
 - keep provider credentials on your own device;
 - choose whether conversation history is stored in MCPtoAI Cloud or only on the selected device;
 - use the web app from another browser or phone while the paired device stays in control of local actions.
@@ -71,6 +71,50 @@ With MCPtoAI you can:
 <td align="center"><strong>Tool-level control</strong><br>Review and control the tools exposed by each connection.</td>
 </tr>
 </table>
+
+## Plugins, integrations and Skills
+
+**Connect the tools you already use — and decide what the AI is allowed to do.** MCPtoAI brings built-in device tools, connected MCP servers and optional Skills into one device-controlled workflow.
+
+| Capability | What you can do |
+| --- | --- |
+| **GitHub integration** | Connect the official GitHub MCP integration to work with repositories, issues and pull requests. |
+| **Google Drive integration** | Connect Google Drive to work with selected files and documents. |
+| **Files & Terminal** | Work in your permitted workspace and enable terminal tools only when needed. |
+| **Custom MCP servers** | Add compatible remote Streamable HTTP or local stdio MCP servers, then discover their available tools. |
+| **Per-tool permissions** | Set **Off**, **Ask** or **Allow** for individual tools; disable or remove a connected server. |
+| **Skills (GitHub packages)** | Inspect supported `SKILL.md` packages pinned to a specific Git commit before approving installation. Enable, disable or remove installed Skills. |
+
+### Connect an MCP integration
+
+1. Open **MCPtoAI Desktop → MCP Servers → Connect a tool**.
+2. Choose a built-in integration such as **GitHub** or **Google Drive**, or select **Custom MCP** to enter a compatible server's connection details.
+3. Complete any required third-party authentication. Review the discovered tools and set their permissions before using them in chat.
+
+### Add a Skill safely
+
+Open **MCPtoAI Desktop → Skills**, enter a GitHub repository URL, package name and **full 40-character commit SHA**, then select **Inspect repository**. MCPtoAI shows the detected package type, supported Skills and file hashes before an explicit **Approve & Install** step. Unsupported repository types cannot be installed through this flow.
+
+> **Security matters:** A Skill is not a sandbox. Third-party scripts can run with your user account's permissions; file hashes check integrity, not safety. Only install packages you trust. Similarly, connected MCP services may receive the inputs and data required to execute their tools. Local tool access remains subject to your configured permissions.
+
+<details>
+<summary><strong>How do Plugins, MCP servers and Skills differ?</strong></summary>
+
+- **Integrations / MCP servers** expose tools from a local or remote service to the AI.
+- **Built-in tools** provide device capabilities such as permitted file access and optional terminal operations.
+- **Skills** are separately reviewed instruction or script packages installed from supported GitHub sources. They do not automatically grant new device permissions.
+
+</details>
+
+## Switch AI models without losing the conversation
+
+**One conversation, multiple models.** You can change the selected AI provider or model during an existing chat without starting over. The next model receives the available conversation context, so you can continue the same task, ask follow-up questions or get a second model's perspective in the same thread.
+
+**Conversation continuity with a bounded context budget.** Rather than blindly sending an unlimited transcript with every request, MCPtoAI Web prepares recent conversation context using a size budget. The current web client retains at least the eight most recent eligible messages and works backward through earlier messages up to an approximate **24,000-token context budget** (estimated from text length, not exact provider tokenization). The Device Agent also supports restoring prior conversation context when a session is resumed.
+
+This is designed to **reduce unnecessary context transmission and token usage while preserving useful recent history**. It is not a guarantee of the fewest possible tokens or perfect recall: very long conversations may exceed the context window, older details may be omitted, and actual token counts and costs depend on the model, provider, tool results and conversation content.
+
+> **Try it:** Start a task with one model, switch to another model in the same chat, and ask it to continue from the previous answer. You do not need to copy and paste the conversation into a new thread.
 
 ## Choose your model. Choose where your data lives.
 
