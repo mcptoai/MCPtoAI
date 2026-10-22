@@ -14,7 +14,8 @@ def test_receipt_store_deduplicates_and_persists_status(tmp_path):
     assert store.claim(mid,"chat-1")== (False,"running")
     store.finish(mid,"completed")
     assert MessageReceiptStore(path).status(mid)=="completed"
-    assert os.stat(path).st_mode & 0o077 == 0
+    if os.name != 'nt':  # Windows'ta POSIX izin bitleri anlamsızdır
+        assert os.stat(path).st_mode & 0o077 == 0
 
 
 def test_running_receipt_becomes_interrupted_after_restart(tmp_path):

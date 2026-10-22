@@ -224,12 +224,41 @@ def _check_name(name: str) -> str:
     return name
 
 
+_API_KEY_PREFIX = "api_key:"
+# Terminale yapıştırırken bulaşan diziler: odak olayları (ESC[I / ESC[O), yapıştırma işaretleri (ESC[200~ ... ESC[201~), OSC, kısa ESC dizileri.
+_ANSI_SEQUENCE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]")
+_warned_keys: set[str] = set()
+
+
+def sanitize_api_key(value: str) -> str:
+    """API anahtarından terminal kaçış dizilerini, kontrol karakterlerini ve boşlukları çıkarır (yapıştırma artıkları).
+
+    Bir anahtarın içinde bunların hiçbiri meşru değildir; kalırlarsa HTTP başlığı bozulur ve sağlayıcı anlamsız bir 400 döndürür."""
+    text = _ANSI_SEQUENCE.sub("", value if isinstance(value, str) else "")
+    return "".join(ch for ch in text if ch.isprintable() and not ch.isspace())
+
+
 def _check_value(value: str) -> str:
     if not isinstance(value, str):
         raise ValueError("Credential value must be a string")
     if len(value.encode("utf-8")) > MAX_VALUE_BYTES:
         raise ValueError("Credential value is too large")
     return value
+
+
+def _reject_control_characters(value: str) -> str:
+    """YALNIZCA yeni yazılan değer için. _check_value kasanın TÜMÜNÜ doğruladığından (_mutate_locked), bu kontrol orada olsaydı eskiden
+    bozuk kaydedilmiş tek bir anahtar kasaya her yazmayı (başka sırlar dahil) engellerdi."""
+    if any((ord(ch) < 32 and ch not in "\t\n\r") or ord(ch) == 127 for ch in value):
+        raise ValueError("Credential value contains control characters (for example terminal escape sequences from a paste)")
+    return value
+
+
+def _prepare_value(name: str, value: str) -> str:
+    """Kaydedilecek YENİ değer: API anahtarları temizlenir; her değer kontrol karakterlerine karşı denetlenir."""
+    if isinstance(value, str) and name.startswith(_API_KEY_PREFIX):
+        value = sanitize_api_key(value)
+    return _reject_control_characters(_check_value(value))
 
 
 def _parse(raw: str, source: str) -> dict[str, str]:
@@ -293,17 +322,31 @@ def vault_status() -> str:
     return {"ok": "ok", "staged": "recovering", "absent": "absent"}[state]
 
 
+def _healed(name: str, value: str | None) -> str | None:
+    """Daha önce bozuk kaydedilmiş API anahtarı okunurken temizlenir (yeniden girmek gerekmez); kullanıcı bir kez uyarılır."""
+    if value and name.startswith(_API_KEY_PREFIX):
+        clean = sanitize_api_key(value)
+        if clean != value:
+            if name not in _warned_keys:
+                _warned_keys.add(name)
+                logging.getLogger("mcptoai.secrets").warning(
+                    "The stored %s contained terminal control characters or spaces (usually from pasting into a terminal); they are ignored. "
+                    "Save it again with 'mcptoai keys set' to clean the vault.", name)
+            return clean
+    return value
+
+
 def get_secret(name: str) -> str | None:
     _check_name(name)
     secrets = read_vault()
-    return None if secrets is None else secrets.get(name)
+    return None if secrets is None else _healed(name, secrets.get(name))
 
 
 def get_secrets(names: Iterable[str]) -> dict[str, str]:
     """Birden çok sırrı tek okumayla döndürür (olmayanlar atlanır)."""
     names = [_check_name(n) for n in names]
     secrets = read_vault() or {}
-    return {n: secrets[n] for n in names if n in secrets}
+    return {n: _healed(n, secrets[n]) for n in names if n in secrets}
 
 
 # --- Yazma -------------------------------------------------------------------
@@ -357,17 +400,17 @@ async def amutate(fn: Callable[[dict[str, str]], None]) -> dict[str, str]:
 
 
 def set_secret(name: str, value: str) -> None:
-    _check_name(name); _check_value(value)
+    _check_name(name); value = _prepare_value(name, value)
     mutate(lambda s: s.__setitem__(name, value))
 
 
 async def aset_secret(name: str, value: str) -> None:
-    _check_name(name); _check_value(value)
+    _check_name(name); value = _prepare_value(name, value)
     await amutate(lambda s: s.__setitem__(name, value))
 
 
 def set_secrets(values: dict[str, str]) -> None:
-    clean = {_check_name(k): _check_value(v) for k, v in values.items()}
+    clean = {_check_name(k): _prepare_value(k, v) for k, v in values.items()}
     if clean:
         mutate(lambda s: s.update(clean))
 

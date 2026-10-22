@@ -113,7 +113,7 @@ def test_relay_stops_retrying_after_device_removed(monkeypatch):
 
 
 def test_status_and_doctor_message_text_is_stable():
-    source=(Path(__file__).parents[1]/"mcptoai_agent"/"__main__.py").read_text()
+    source=(Path(__file__).parents[1]/"mcptoai_agent"/"__main__.py").read_text(encoding="utf-8")
     assert "This device was removed from your account. Pair it again." in source
 
 

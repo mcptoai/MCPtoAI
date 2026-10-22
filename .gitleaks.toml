@@ -1,0 +1,11 @@
+title = "MCPtoAI public source secret detection"
+[extend]
+useDefault = true
+
+# Auth0 device-application client ID is a public identifier already published in 0.1.x.
+# Value-specific exception only; a different client ID must be reviewed.
+[[allowlists]]
+description = "Auth0 device-application client ID is a public identifier already published in 0.1.x"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = ['''^sAqB06RgSeNJrsuYs8G8QBSB2QNEljlF$''']

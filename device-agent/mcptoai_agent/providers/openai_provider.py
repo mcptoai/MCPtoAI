@@ -8,7 +8,9 @@ from pathlib import Path
 from openai import NotFoundError, BadRequestError, APIStatusError
 from ..paths import config_dir
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, DefaultAsyncHttpxClient
+
+from ..net import resilient_http_client
 
 from .base import AssistantTurn, Provider, ToolCall, ToolSpec
 
@@ -19,7 +21,7 @@ class OpenAIProvider(Provider):
     def __init__(self, api_key: str, model: str, base_url: str | None = None) -> None:
         super().__init__(api_key, model)
         self.base_url = (base_url or "").rstrip("/")
-        self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self.client = AsyncOpenAI(api_key=api_key, base_url=base_url, http_client=resilient_http_client(DefaultAsyncHttpxClient))
 
     @property
     def _is_nvidia(self) -> bool:
@@ -112,7 +114,8 @@ class OpenAIProvider(Provider):
                 raise RuntimeError("This NVIDIA model has been retired and is no longer available.") from None
             raise
         choice = resp.choices[0].message
-        turn = AssistantTurn(text=choice.content or "")
+        finish = str(getattr(resp.choices[0], "finish_reason", "") or "")
+        turn = AssistantTurn(text=choice.content or "", stop_reason="max_tokens" if finish == "length" else finish)
         for tc in choice.tool_calls or []:
             try:
                 args = json.loads(tc.function.arguments or "{}")

@@ -44,7 +44,7 @@ With MCPtoAI you can:
 - choose whether conversation history is stored in MCPtoAI Cloud or only on the selected device;
 - use the web app from another browser or phone while the paired device stays in control of local actions.
 
-> **Available now:** macOS 13+ on Apple silicon, Windows 10+ (x64), Linux CLI 0.1.18 and the official Docker image.
+> **Available now:** macOS 13+ on Apple silicon, Windows 10+ (x64), Linux CLI 0.2.3 and the official Docker image.
 
 ## Your computer. Your permissions.
 
@@ -95,8 +95,8 @@ Download the signed installer from:
 
 - **macOS:** signed, notarized and distributed for Apple silicon.
 - **Windows:** signed installer for x64 systems.
-- **Linux CLI:** `python3 -m pip install mcptoai==0.1.18`
-- **Docker:** `docker pull ghcr.io/mcptoai/mcptoai:0.1.18`
+- **Linux CLI:** `python3 -m pip install mcptoai==0.2.3`
+- **Docker:** `docker pull ghcr.io/mcptoai/mcptoai:0.2.3`
 
 ### 2. Pair your computer
 

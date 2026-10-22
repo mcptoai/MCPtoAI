@@ -1,6 +1,6 @@
 [project]
 name = "mcptoai-agent"
-version = "0.1.18"
+version = "0.2.3"
 description = "MCPtoAI device agent: kullanıcının kendi API anahtarıyla cihazda çalışan agent döngüsü + MCP araçları"
 requires-python = ">=3.11"
 

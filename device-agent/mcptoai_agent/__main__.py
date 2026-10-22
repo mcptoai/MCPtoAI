@@ -31,7 +31,11 @@ def _write_json_stdout(value) -> None:
 
 
 def _set_key(provider: str, from_stdin: bool = False) -> None:
-    key = (sys.stdin.readline() if from_stdin else getpass.getpass(f'{provider} API key: ')).strip()
+    from .secret_store import sanitize_api_key
+    raw = (sys.stdin.readline() if from_stdin else getpass.getpass(f'{provider} API key: ')).strip()
+    key = sanitize_api_key(raw)
+    if key != raw:
+        print("Removed terminal control characters or spaces from the pasted key (a terminal paste can add escape sequences).", file=sys.stderr)
     if not key:
         raise SystemExit("Anahtar boş")
     set_secret(api_key_name(provider), key)
@@ -116,9 +120,58 @@ def main() -> None:
     sub.add_parser("probe-provider")
     shell_access=sub.add_parser("shell-access"); shell_access.add_argument("action",choices=["status","on","off"])
     perm=sub.add_parser("permission"); perm.add_argument("action",choices=["status","request"]); perm.add_argument("kind",choices=["screen"])
+    sk=sub.add_parser("skills")
+    sk_sub=sk.add_subparsers(dest="skills_action",required=True)
+    sk_sub.add_parser("list")
+    sk_ins=sk_sub.add_parser("inspect");sk_ins.add_argument("source");sk_ins.add_argument("--package",required=True);sk_ins.add_argument("--commit",required=True)
+    sk_add=sk_sub.add_parser("add")
+    sk_add.add_argument("source",help="Local package directory or https://github.com/<owner>/<repo>")
+    sk_add.add_argument("--package",required=True)
+    sk_add.add_argument("--commit",required=True,help="40-character pinned Git commit SHA")
+    sk_add.add_argument("--approve",action="store_true",help="Confirm reviewed file and SHA list")
+    sk_add.add_argument("--expected-digest",help="SHA256 of reviewed package preview")
+    sk_rm=sk_sub.add_parser("remove");sk_rm.add_argument("package",help="Installed package name (skills are removed per package)")
+    sk_en=sk_sub.add_parser("enable");sk_en.add_argument("name")
+    sk_dis=sk_sub.add_parser("disable");sk_dis.add_argument("name")
     sub.add_parser("doctor")
     args = p.parse_args()
 
+    if args.cmd == "skills":
+        from . import skills as skill_store
+        from pathlib import Path
+        if args.skills_action == "inspect":
+            from .extension_discovery import inspect_repository
+            import tempfile
+            if args.source.startswith('https://'):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root=skill_store.fetch_github(args.source,args.commit,Path(tmp),whole_repository=True)
+                    print(json.dumps(inspect_repository(root,args.package,args.commit),indent=2))
+            else:
+                print(json.dumps(inspect_repository(Path(args.source),args.package,args.commit),indent=2))
+        elif args.skills_action == "list":
+            print(json.dumps(skill_store.list_skills(),indent=2))
+        elif args.skills_action == "add":
+            import tempfile
+            def _install(folder):
+                preview=skill_store.inspect_package(folder,args.package,args.commit)
+                print(json.dumps(preview,indent=2))
+                if args.approve:
+                    if not args.expected_digest or args.expected_digest != skill_store.preview_digest(preview):
+                        raise PermissionError('Reviewed package digest mismatch; inspect again')
+                    skill_store.install_package(folder,args.package,args.commit,approved=True)
+                else:
+                    print("Review the files and hashes, then repeat with --approve to install.")
+            if args.source.startswith("https://"):
+                # GitHub kaynağı yalnızca tam commit SHA'sından çekilir ve çekilen commit doğrulanır.
+                with tempfile.TemporaryDirectory() as tmp:
+                    _install(skill_store.fetch_github(args.source,args.commit,Path(tmp)))
+            else:
+                _install(Path(args.source))
+        elif args.skills_action == "remove":
+            print(json.dumps({"removed_package":args.package,"skills":skill_store.remove_package(args.package)}))
+        elif args.skills_action in {"enable","disable"}:
+            skill_store.set_enabled(args.name,args.skills_action=="enable")
+        return
     if args.cmd in {"set-key","remove-key","key-status"}:
         import re
         if not re.fullmatch(r"[a-z0-9_-]{1,64}",args.provider): raise SystemExit("Invalid provider ID")
