@@ -11,6 +11,8 @@ MCPtoAI 0.2.3 improves how your paired computer handles local tools, sensitive f
 - **Clearer tool results:** actions distinguish `completed`, `failed`, `blocked`, and `denied`. Statuses are communicated with text and icons, not color alone.
 - **Safer approval details:** the agent, not model-supplied tool arguments, determines file metadata shown in approval prompts for supported file operations.
 - **Video controls:** in-chat playback includes native controls and accessible seek buttons, using five-second steps for short clips and ten-second steps for longer clips.
+- **Cleaner API keys:** when you paste an API key into the Linux CLI or Device Agent CLI, control characters are removed. Keys previously saved with these characters are automatically repaired.
+- **More reliable Linux AI connections:** TLS fallback handling helps Linux connect to AI providers when the usual certificate verification path is unavailable.
 
 ## Security and known limitations
 
@@ -23,7 +25,7 @@ MCPtoAI 0.2.3 improves how your paired computer handles local tools, sensitive f
 ## Upgrading
 
 - **macOS and Windows:** when version 0.2.3 is offered in MCPtoAI Desktop, use **Check for Updates**, download the update, and choose **Restart & Install**. Reopen Desktop and confirm both the Desktop and Device Agent versions. Keep the device paired and review permissions after updating.
-- **Linux CLI:** once 0.2.3 is published on PyPI, upgrade with `python3 -m pip install --upgrade mcptoai==0.2.3`, then check `mcptoai --version`. Do not use this command as evidence that the version is already published.
-- **Docker:** once the 0.2.3 image is published, pull the versioned image `ghcr.io/mcptoai/mcptoai:0.2.3`. Keep your persistent configuration volume when replacing a container; verify the image digest from the trusted release information.
+- **Linux CLI:** `python3 -m pip install --upgrade mcptoai`. After upgrading, check the installed version with `mcptoai --version`.
+- **Docker:** `docker pull ghcr.io/mcptoai/mcptoai:0.2.3`. Keep your persistent configuration volume when replacing a container; verify the image digest from the trusted release information.
 
 See [SECURITY.md](../SECURITY.md) for reporting security issues and the [Linux guide](../linux-agent/README.md) for platform-specific setup.
