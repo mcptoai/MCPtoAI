@@ -1,12 +1,11 @@
-title = "MCPtoAI public source: narrow Auth0 device client ID exception"
+title = "MCPtoAI public source secret detection"
 [extend]
 useDefault = true
 
 # Auth0 device-application client ID is a public identifier already published in 0.1.x.
-# All criteria must match; no other identifiers or paths are allowlisted.
-[allowlist]
+# Value-specific exception only; a different client ID must be reviewed.
+[[allowlists]]
 description = "Auth0 device-application client ID is a public identifier already published in 0.1.x"
-condition = "AND"
-regexTarget = "line"
-regexes = ['''^PRODUCTION_AUTH0_DEVICE_CLIENT_ID\s*=\s*["'][A-Za-z0-9_-]+["']\s*$''']
-paths = ['''(?:^|/)(device-agent/mcptoai_agent/config\.py|linux-agent/mcptoai_linux/config\.py)$''']
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = ['''^sAqB06RgSeNJrsuYs8G8QBSB2QNEljlF$''']
