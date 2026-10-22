@@ -72,6 +72,40 @@ With MCPtoAI you can:
 </tr>
 </table>
 
+## Plugins, integrations and Skills
+
+**Connect the tools you already use — and decide what the AI is allowed to do.** MCPtoAI brings built-in device tools, connected MCP servers and optional Skills into one device-controlled workflow.
+
+| Capability | What you can do |
+| --- | --- |
+| **GitHub integration** | Connect the official GitHub MCP integration to work with repositories, issues and pull requests. |
+| **Google Drive integration** | Connect Google Drive to work with selected files and documents. |
+| **Files & Terminal** | Work in your permitted workspace and enable terminal tools only when needed. |
+| **Custom MCP servers** | Add compatible remote Streamable HTTP or local stdio MCP servers, then discover their available tools. |
+| **Per-tool permissions** | Set **Off**, **Ask** or **Allow** for individual tools; disable or remove a connected server. |
+| **Skills (GitHub packages)** | Inspect supported `SKILL.md` packages pinned to a specific Git commit before approving installation. Enable, disable or remove installed Skills. |
+
+### Connect an MCP integration
+
+1. Open **MCPtoAI Desktop → MCP Servers → Connect a tool**.
+2. Choose a built-in integration such as **GitHub** or **Google Drive**, or select **Custom MCP** to enter a compatible server's connection details.
+3. Complete any required third-party authentication. Review the discovered tools and set their permissions before using them in chat.
+
+### Add a Skill safely
+
+Open **MCPtoAI Desktop → Skills**, enter a GitHub repository URL, package name and **full 40-character commit SHA**, then select **Inspect repository**. MCPtoAI shows the detected package type, supported Skills and file hashes before an explicit **Approve & Install** step. Unsupported repository types cannot be installed through this flow.
+
+> **Security matters:** A Skill is not a sandbox. Third-party scripts can run with your user account's permissions; file hashes check integrity, not safety. Only install packages you trust. Similarly, connected MCP services may receive the inputs and data required to execute their tools. Local tool access remains subject to your configured permissions.
+
+<details>
+<summary><strong>How do Plugins, MCP servers and Skills differ?</strong></summary>
+
+- **Integrations / MCP servers** expose tools from a local or remote service to the AI.
+- **Built-in tools** provide device capabilities such as permitted file access and optional terminal operations.
+- **Skills** are separately reviewed instruction or script packages installed from supported GitHub sources. They do not automatically grant new device permissions.
+
+</details>
+
 ## Choose your model. Choose where your data lives.
 
 <table>
