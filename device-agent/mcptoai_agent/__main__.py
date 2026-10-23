@@ -483,6 +483,10 @@ def main() -> None:
         }
         for name, value in checks.items():
             print(f"{name}: {value}")
+        from .security_php import inspect_php
+        php = inspect_php()
+        if php.status != "absent":
+            print(f"PHP security [{php.status.upper()}]: {php.detail}")
         if not settings.auth0_domain or not settings.auth0_device_client_id:
             raise SystemExit("MCPtoAI production Auth0 configuration is incomplete.")
     elif args.cmd == "connect":
