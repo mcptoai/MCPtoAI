@@ -19,6 +19,14 @@ from dataclasses import replace
 from . import __version__
 
 
+def _configure_console_encoding():
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError, AttributeError):
+                pass
+
 # --- yardımcılar --------------------------------------------------------------
 
 def _cfg(**over):
@@ -968,6 +976,7 @@ Useful for a quick connection test, debugging, or container entrypoints. Press C
     return p
 
 def main(argv: list[str] | None = None) -> None:
+    _configure_console_encoding()
     import os
     args = build_parser().parse_args(argv)
     if args.cmd == "jobs" and getattr(args, "action", None) is None:
