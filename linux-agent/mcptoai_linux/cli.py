@@ -254,6 +254,10 @@ def cmd_doctor(_a) -> None:
         check("Background service", service.is_active(), service.status_line())
         check("Start at boot (linger)", service.linger_enabled(), "on" if service.linger_enabled() else "sudo loginctl enable-linger $USER")
     print(f"  Terminal commands: {'on' if cfg.enable_shell else 'off'}")
+    from .security_php import inspect_php
+    php = inspect_php()
+    if php.status != "absent":
+        print(f"  [PHP {php.status.upper()}] {php.detail}")
     for ok, name, detail in checks:
         print(f"  [{'OK' if ok else '!!'}] {name}: {detail}")
     if not all(ok for ok, _, _ in checks):
