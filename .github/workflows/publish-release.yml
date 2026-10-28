@@ -43,8 +43,7 @@ jobs:
           version = sys.argv[1]
           desktop = json.loads(pathlib.Path("desktop/package.json").read_text())["version"]
           agent = re.search(r'(?m)^version\s*=\s*"([^"]+)"', pathlib.Path("device-agent/pyproject.toml").read_text()).group(1)
-          linux = re.search(r'(?m)^version\s*=\s*"([^"]+)"', pathlib.Path("linux-agent/pyproject.toml").read_text()).group(1)
-          for name, actual in [("Desktop",desktop),("Device Agent",agent),("Linux CLI",linux)]:
+          for name, actual in [("Desktop",desktop),("Device Agent",agent)]:
               print(f"{name}: {actual}")
               if actual != version:
                   raise SystemExit(f"Version mismatch: {name} {actual} != {version}")
@@ -55,7 +54,6 @@ jobs:
         run: |
           set -euo pipefail
           version="$RELEASE_VERSION"
-          curl -fsSI "https://pypi.org/pypi/mcptoai/$version/json" >/dev/null
           curl -fsSI "https://api.mcptoai.com/releases/macos/MCPtoAI-$version-arm64.dmg?release=$version" >/dev/null
           curl -fsSI "https://api.mcptoai.com/releases/windows/MCPtoAI-$version-x64-Setup.exe" >/dev/null
       - name: Create tag for manual release
@@ -90,17 +88,13 @@ jobs:
           set -euo pipefail
           version="$RELEASE_VERSION"
           cat > release-notes.md <<EOF
-          MCPtoAI $version — macOS, Windows, Linux CLI and Docker.
+          MCPtoAI Desktop $version — macOS and Windows.
 
           ### Downloads
           - [macOS Apple Silicon DMG](https://api.mcptoai.com/releases/macos/MCPtoAI-$version-arm64.dmg?release=$version)
           - [Windows x64 installer](https://api.mcptoai.com/releases/windows/MCPtoAI-$version-x64-Setup.exe)
-          - [Linux CLI on PyPI](https://pypi.org/project/mcptoai/$version/)
-          - [Official Docker image](https://github.com/mcptoai/MCPtoAI/pkgs/container/mcptoai)
-
-          \`python3 -m pip install mcptoai==$version\`
-
-          \`docker pull ghcr.io/mcptoai/mcptoai:$version\`
+          - [Linux CLI on PyPI (independent version)](https://pypi.org/project/mcptoai/)
+          - [Official Docker images (independent version)](https://github.com/mcptoai/MCPtoAI/pkgs/container/mcptoai)
 
           See [Downloads](https://mcptoai.com/downloads/) for current installation instructions.
           EOF
