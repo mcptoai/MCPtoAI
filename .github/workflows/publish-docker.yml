@@ -45,6 +45,19 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse to overwrite a published version
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/mcptoai/mcptoai:${VERSION}"
+          output=$(docker manifest inspect "$image" 2>&1) && {
+            echo "::error::$image already exists; publish a new version instead."
+            exit 1
+          }
+          if ! grep -Eiq 'no such manifest|manifest unknown|not found' <<< "$output"; then
+            echo "::error::Cannot verify that $image is absent: $output"
+            exit 1
+          fi
       - name: Build and push immutable version plus latest
         id: build
         uses: docker/build-push-action@v6

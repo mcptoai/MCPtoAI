@@ -111,3 +111,5 @@ html,body{height:100%;overflow:hidden}body{position:relative}body>aside#appSideb
 .code-block pre{display:block;margin:0;padding:14px;min-height:0;width:100%;max-width:100%;overflow-x:auto;overflow-y:visible;white-space:pre;line-height:1.55;background:#090d13;border:0;border-radius:0;color:#dce4ef}
 .code-block code{font:12.5px ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#dce4ef}
 @media(max-width:720px){.chat-bubble.assistant{width:96%;max-width:96%}.code-block{margin-left:0;margin-right:0}.code-block pre{padding:12px}}
+
+.desktop-quick-tips{margin-top:18px;padding:14px 18px;border:1px solid #354052;border-radius:12px;background:#101720;color:#c9d5e4}.desktop-quick-tips summary{cursor:pointer;font-weight:700}.desktop-quick-tips ol{line-height:1.7;padding-left:21px}.desktop-quick-tips small{color:#9ba8b9}

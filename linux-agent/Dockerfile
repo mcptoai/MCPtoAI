@@ -7,6 +7,7 @@ COPY mcptoai_linux ./mcptoai_linux
 RUN pip wheel --no-cache-dir --wheel-dir /wheels .
 
 FROM python:3.12-slim
+LABEL org.opencontainers.image.source="https://github.com/mcptoai/MCPtoAI"
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     MCPTOAI_CONTAINER=1
