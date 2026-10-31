@@ -87,6 +87,7 @@ class OpenAIProvider(Provider):
         try:
             kwargs = {
                 "model": self.model,
+                "stream": False,
                 "messages": self._convert(system, messages),
             }
             if tools:
@@ -112,6 +113,8 @@ class OpenAIProvider(Provider):
                 self._mark_nvidia_unavailable(self.model)
                 raise RuntimeError("This NVIDIA model has been retired and is no longer available.") from None
             raise
+        from .openai_compat import normalize_completion
+        resp = normalize_completion(resp)
         choice = resp.choices[0].message
         turn = AssistantTurn(text=choice.content or "", stop_reason="max_tokens" if resp.choices[0].finish_reason == "length" else str(resp.choices[0].finish_reason or ""))
         for tc in choice.tool_calls or []:

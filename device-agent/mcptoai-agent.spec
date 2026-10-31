@@ -1,10 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 import os
+import sys
 
 datas = []
+if os.path.isfile('mcptoai_agent/build-info.json'):
+    datas.append(('mcptoai_agent/build-info.json', 'mcptoai_agent'))
 binaries = []
-hiddenimports = ['keyring.backends.macOS']
+hiddenimports = ['keyring.backends.Windows' if sys.platform == 'win32' else 'keyring.backends.macOS'] if sys.platform in ('win32','darwin') else []
 tmp_ret = collect_all('keyring')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('fastmcp')
@@ -46,7 +49,7 @@ exe = EXE(
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
-    codesign_identity=os.getenv("MCPTOAI_PYINSTALLER_CODESIGN_IDENTITY", "Developer ID Application: AHMET BAKTIAYA (WCUHC7RX92)") or None,
+    codesign_identity=(os.getenv("MCPTOAI_PYINSTALLER_CODESIGN_IDENTITY", "Developer ID Application: AHMET BAKTIAYA (WCUHC7RX92)") or None) if sys.platform == "darwin" else None,
     entitlements_file=None,
 )
 coll = COLLECT(

@@ -153,7 +153,10 @@ class RelayClient:
             turn=self._turn_state.get(sid)
             if turn and turn["id"]==turn_id and event.get("type")=="done": turn["active"]=False
         journal=self._event_journal.setdefault(sid,collections.deque(maxlen=500)); journal.append(envelope)
-        self._durable_events.append(sid,envelope)
+        try:
+            self._durable_events.append(sid,envelope)
+        except Exception:
+            logger.exception("Event journal append failed; relay event continues")
         # Günlük ve tur durumları aynı oturum sınırında budanır.
         if len(self._event_journal)>50:
             for old_sid in list(self._event_journal)[:-50]:

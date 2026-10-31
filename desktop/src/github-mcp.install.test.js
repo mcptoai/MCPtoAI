@@ -1,5 +1,7 @@
 // GitHub MCP kurulum testleri (ağ gerektirir: sabitlenmiş sürümü gerçekten indirir).
 // Çalıştırma: node src/github-mcp.install.test.js
+// İkili dağıtım yalnızca desteklenen masaüstü platformlarında sınanır.
+if(!['darwin','win32'].includes(process.platform)){console.log('SKIP: GitHub MCP binary installation requires macOS or Windows');process.exit(0)}
 const assert=require('assert'),fs=require('fs'),os=require('os'),path=require('path');
 const {installOfficial,MARKER}=require('./github-mcp');
 const realFetch=global.fetch;let downloads=0;

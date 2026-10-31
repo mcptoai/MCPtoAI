@@ -979,7 +979,18 @@ Warning:
 Useful for a quick connection test, debugging, or container entrypoints. Press Ctrl-C to disconnect.""").set_defaults(fn=cmd_run)
     return p
 
+def _configure_console_encoding():
+    """Terminal çıktısını UTF-8 olarak yapılandır."""
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError, AttributeError):
+                pass
+
+
 def main(argv: list[str] | None = None) -> None:
+    _configure_console_encoding()
     _configure_console_encoding()
     import os
     args = build_parser().parse_args(argv)

@@ -1,6 +1,6 @@
 {
   "name": "mcptoai-desktop",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "scripts": {
     "start": "electron .",
@@ -8,9 +8,9 @@
     "pack:mac": "npm run build:permission-helper:mac && npm run build:agent:mac && npm run build:agent-bundle:mac && electron-builder --mac dir",
     "dist:mac": "npm run build:permission-helper:mac && npm run build:agent:mac && npm run build:agent-bundle:mac && electron-builder --mac dmg",
     "dist:win": "npm run build:agent:win && electron-builder --win nsis",
-    "build:agent:mac": "cd ../device-agent && .venv/bin/pyinstaller --noconfirm --clean mcptoai-agent.spec && cd ../desktop && node scripts/write-agent-version.js",
+    "build:agent:mac": "node scripts/write-build-info.js && cd ../device-agent && .venv/bin/pyinstaller --noconfirm --clean mcptoai-agent.spec && cd ../desktop && node scripts/write-agent-version.js",
     "build:permission-helper:mac": "mkdir -p native/bin && xcrun swiftc native/PermissionHelper.swift -framework AVFoundation -o native/bin/permission-helper",
-    "build:agent:win": "powershell -ExecutionPolicy Bypass -File ../device-agent/scripts/build-windows.ps1 && node scripts/sign-built-agent-win.js && node scripts/write-agent-version-win.js",
+    "build:agent:win": "node scripts/write-build-info.js && powershell -ExecutionPolicy Bypass -File ../device-agent/scripts/build-windows.ps1 && node scripts/sign-built-agent-win.js && node scripts/write-agent-version-win.js",
     "pack:win": "npm run build:agent:win && electron-builder --win dir",
     "pack:mac:local": "npm run build:permission-helper:mac && npm run build:agent:mac && npm run build:agent-bundle:mac && MCPTOAI_ALLOW_UNSIGNED_AGENT=1 CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --config.mac.identity=null",
     "security:scan:mac": "python3 ../scripts/package-security-scan.py --resources dist/mac-arm64/MCPtoAI.app/Contents/Resources --desktop-dir .",
@@ -27,6 +27,7 @@
     "productName": "MCPtoAI",
     "files": [
       "src/**/*",
+      "build/icon.png",
       "!src/**/*.bak",
       "!src/**/*.bak_*",
       "!src/**/*~",
@@ -43,6 +44,10 @@
       "minimumSystemVersion": "13.0",
       "artifactName": "MCPtoAI-${version}-${arch}.${ext}",
       "extraResources": [
+        {
+          "from": "build-info.json",
+          "to": "build-info.json"
+        },
         {
           "from": "agent-version.json",
           "to": "agent-version.json"
@@ -92,6 +97,10 @@
         {
           "from": "../device-agent/dist/mcptoai-agent",
           "to": "agent"
+        },
+        {
+          "from": "build-info.json",
+          "to": "build-info.json"
         },
         {
           "from": "agent-version.json",
