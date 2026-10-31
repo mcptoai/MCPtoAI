@@ -53,3 +53,11 @@ desktop/build/*
 
 # Python editable-install metadata
 **/*.egg-info/
+
+# Tracked desktop packaging inputs (not generated output)
+!desktop/build/
+desktop/build/*
+!desktop/build/icon.png
+!desktop/build/icon.icns
+!desktop/build/icon.ico
+!desktop/build/entitlements.mac.plist
