@@ -29,6 +29,8 @@ module.exports = async function hardenElectronPackage(context) {
   const rebuilt = path.join(tmp, 'app.asar');
   try {
     asar.extractAll(appAsar, extracted);
+    const icon = path.join(extracted, 'build', 'icon.png');
+    if (!fs.existsSync(icon) || fs.statSync(icon).size === 0) throw new Error('Missing build/icon.png inside app.asar');
     const src = path.join(extracted, 'src');
     let minified = 0;
     if (fs.existsSync(src)) {

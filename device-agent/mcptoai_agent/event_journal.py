@@ -2,13 +2,24 @@
 from __future__ import annotations
 import json
 import os
+import logging
+import threading
+import time
+import uuid
+import subprocess
 from collections import deque
 from pathlib import Path
 from .paths import config_dir
 
+logger = logging.getLogger(__name__)
+
 class EventJournal:
     def __init__(self, path: Path | None = None):
         self.path = Path(path) if path else config_dir() / 'relay-events.json'
+        self._lock = threading.RLock()
+        self._timer = None
+        self._retry_after = 0.0
+        self._failures = 0
         self.data = {}
         try:
             raw = json.loads(self.path.read_text(encoding='utf-8'))
@@ -19,6 +30,13 @@ class EventJournal:
         if not isinstance(self.data, dict): self.data = {}
 
     def append(self, session_id: str, envelope: dict):
+        try:
+            with self._lock:
+                self._append_locked(session_id, envelope)
+        except Exception:
+            logger.exception("Event journal append failed (best effort)")
+
+    def _append_locked(self, session_id: str, envelope: dict):
         # Never persist tool arguments, approval tokens, image data, or credentials.
         event = envelope.get('event') or {}
         if event.get('type') not in {'text', 'done', 'error', 'approval_resolved', 'approval_required'}: return
@@ -40,27 +58,71 @@ class EventJournal:
         records.append(entry)
         self.data[session_id] = records[-250:]
         while len(self.data)>50: self.data.pop(next(iter(self.data)))
-        self._save()
+        if event.get('type') == 'done':
+            self._save()
+        elif self._timer is None:
+            self._timer = threading.Timer(0.5, self._flush_timer)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def _flush_timer(self):
+        with self._lock:
+            self._timer = None
+            self._save()
+
+    def flush(self):
+        with self._lock:
+            if self._timer:
+                self._timer.cancel()
+                self._timer = None
+            self._save()
 
     def _save(self):
+        with self._lock:
+            if time.monotonic() < self._retry_after:
+                return
+            try:
+                self._save_locked()
+                self._failures = 0
+                self._retry_after = 0
+            except Exception:
+                self._failures += 1
+                self._retry_after = time.monotonic() + min(30, 0.5 * 2 ** min(self._failures, 6))
+                logger.exception("Event journal write failed; retry temporarily suspended")
+
+    def _save_locked(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp=self.path.with_suffix('.tmp')
-        fd=os.open(tmp, os.O_WRONLY|os.O_CREAT|os.O_TRUNC, 0o600)
-        try:
-            with os.fdopen(fd,'w',encoding='utf-8') as f:
-                json.dump({'version':1,'sessions':self.data},f,ensure_ascii=False)
-                f.flush();os.fsync(f.fileno())
-            os.replace(tmp,self.path)
-            os.chmod(self.path,0o600)
-            if os.name == 'nt':
-                import subprocess
-                account = os.environ.get('USERNAME')
-                if not account:
-                    raise OSError('Missing Windows user for journal ACL')
-                subprocess.run(
-                    ['icacls', str(self.path), '/inheritance:r', '/grant:r', account + ':F'],
-                    check=True, capture_output=True,
-                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
-                )
-        finally:
-            if tmp.exists(): tmp.unlink()
+        payload = json.dumps({'version':1,'sessions':self.data},ensure_ascii=False)
+        last_error = None
+        for attempt in range(7):
+            tmp = self.path.with_name(f"relay-events.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+            try:
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    f.write(payload)
+                    f.flush()
+                    os.fsync(f.fileno())
+                if os.name == 'nt':
+                    # Her yeni geçici dosyanın ACL'sini atomik değiştirmeden önce kısıtla.
+                    account = os.environ.get('USERNAME')
+                    if not account:
+                        raise OSError('Missing Windows user for journal ACL')
+                    subprocess.run(
+                        ['icacls', str(tmp), '/inheritance:r', '/grant:r', account + ':F'],
+                        check=True, capture_output=True,
+                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), timeout=10,
+                    )
+                os.replace(tmp, self.path)
+                if os.name != 'nt':
+                    os.chmod(self.path, 0o600)
+                return
+            except (OSError, subprocess.SubprocessError) as exc:
+                last_error = exc
+                if attempt < 6:
+                    time.sleep(min(0.04 * (2 ** attempt), 0.7))
+            finally:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        raise OSError("Event journal atomic replace failed after retries") from last_error

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcptoai"
-version = "0.2.5"
+version = "0.2.6"
 description = "MCPtoAI for Linux: chat with AI on your server from the web, your phone or the terminal"
 readme = "README.md"
 requires-python = ">=3.11"

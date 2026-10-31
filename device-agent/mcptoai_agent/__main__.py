@@ -23,6 +23,16 @@ from .config import settings
 from .secret_store import api_key_name, set_secret, get_secret
 
 
+def _configure_console_encoding():
+    import sys
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError, AttributeError):
+                pass
+
+
 def _write_json_stdout(value) -> None:
     """Write one JSON line as UTF-8 bytes, independent of Windows console code pages."""
     payload=(json.dumps(value,ensure_ascii=False,default=str)+"\n").encode("utf-8")
@@ -84,9 +94,11 @@ def _bool_env(name: str) -> bool:
     return _bool(name)
 
 def main() -> None:
+    _configure_console_encoding()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     p = argparse.ArgumentParser(prog="mcptoai-agent")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    p.add_argument("--version", action="store_true", help="show version and build commit")
+    sub = p.add_subparsers(dest="cmd")
     sk = sub.add_parser("set-key")
     sk.add_argument("provider")
     sk.add_argument("--stdin", action="store_true", help=argparse.SUPPRESS)
@@ -135,6 +147,16 @@ def main() -> None:
     sk_dis=sk_sub.add_parser("disable");sk_dis.add_argument("name")
     sub.add_parser("doctor")
     args = p.parse_args()
+    if args.version:
+        from . import __version__ as v
+        try:
+            from importlib.resources import files
+            info=json.loads(files("mcptoai_agent").joinpath("build-info.json").read_text())
+        except (FileNotFoundError, OSError, ValueError):
+            info={}
+        print(f"mcptoai-agent {v} commit={info.get('commit','unknown')} date={info.get('date','unknown')} platform={info.get('platform','unknown')} dirty={str(info.get('dirty','unknown')).lower()}")
+        return
+    if not args.cmd: p.error("a command is required")
 
     if args.cmd == "skills":
         from . import skills as skill_store
@@ -491,11 +513,18 @@ def main() -> None:
             raise SystemExit("MCPtoAI production Auth0 configuration is incomplete.")
     elif args.cmd == "connect":
         from .relay_client import run_relay_client
+        from .agent_instance_lock import agent_instance_lock
+        from .credential_lock import CredentialLockTimeout
         try:
-            asyncio.run(run_relay_client(settings))
+            with agent_instance_lock():
+                asyncio.run(run_relay_client(settings))
+        except CredentialLockTimeout:
+            raise SystemExit("MCPtoAI agent is already running on this device.")
         except KeyboardInterrupt:
             pass
 
 
+
 if __name__ == "__main__":
+    _configure_console_encoding()
     main()
