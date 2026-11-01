@@ -16,9 +16,9 @@ SECRET_PATTERNS = {
     'Private key PEM': re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----'),
 }
 PATH_PATTERNS = {
-    'developer macOS home path': re.compile(rb'/Users/[^/\x00\r\n ]+/Documents/Projects/MCPtoAI', re.I),
+    'developer macOS home path': re.compile(rb'/Users/(?:ahmetbaktiaya|[^/\x00\r\n ]+)/Documents/Projects/MCPtoAI', re.I),
     'developer Windows project path': re.compile(rb'C:\\\\Users\\\\[^\\\x00\r\n]+\\\\Documents\\\\Projects\\\\MCPtoAI', re.I),
-    'server home path': re.compile(rb'/home/[^/\x00\r\n ]+/mcptoai(?:-[a-z]+)?/', re.I),
+    'server home path': re.compile(rb'/home/bktyserver/', re.I),
 }
 
 def asar_list(asar: Path, desktop_dir: Path) -> list[str]:

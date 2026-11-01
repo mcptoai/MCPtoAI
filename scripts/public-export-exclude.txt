@@ -1,0 +1,20 @@
+# Core-only paths never exported to the public client repository.
+backend/**
+web/**
+ops/**
+.github/**
+.gitignore
+LICENSE
+README.md
+SECURITY.md
+desktop/build/artifact-signing-metadata.json
+**/.env
+**/.env.*
+**/dist/**
+**/node_modules/**
+**/.venv/**
+device-agent/reference/uhm/**
+docs/PUBLISH_PLAN_0.2.3.md
+docs/VERSION_AUDIT_0.2.4.md
+docs/backend-event-idempotency-0.1.17.md
+docs/universal-artifacts.md
