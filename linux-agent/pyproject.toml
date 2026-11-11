@@ -52,3 +52,6 @@ mcptoai = "mcptoai_linux.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["mcptoai_linux*"]
+
+[tool.setuptools.package-data]
+mcptoai_linux = ["build-info.json"]

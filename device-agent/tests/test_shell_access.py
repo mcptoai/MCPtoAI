@@ -78,5 +78,7 @@ def test_izin_dosyasina_yalnizca_yerel_kod_yazabilir():
             offenders.append(str(path.relative_to(PKG)))
     assert offenders == [], f"yerel izin dosyasına erişen modüller: {offenders}"
     main = (PKG / "__main__.py").read_text(encoding="utf-8")
-    # __main__ içinde save_local_permission yalnızca shell-access komutunda kullanılır.
-    assert main.count("save_local_permission(") == 1
+    # Yerel CLI izinleri yalnızca shell-access ve siwc-preview komutlarında değiştirir.
+    assert main.count("save_local_permission(") == 5  # shell-access, Desktop Preview and separate web opt-in
+    assert 'save_local_permission("shell", args.action=="on")' in main
+    assert 'save_local_permission("siwc_enabled", args.action == "on")' in main

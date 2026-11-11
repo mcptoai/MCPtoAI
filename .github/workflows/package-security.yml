@@ -20,16 +20,14 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.14'
       - name: Install desktop dependencies
         working-directory: desktop
         run: npm ci
       - name: Prepare Device Agent environment
         working-directory: device-agent
         run: |
-          python -m venv .venv
-          .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/python -m pip install -e . pyinstaller
+          python3.14 scripts/setup-build-env.py
       - name: Build unsigned macOS package
         working-directory: desktop
         env:

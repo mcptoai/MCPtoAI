@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse, os, re, subprocess, sys
 from pathlib import Path
 
-BACKUP_RE = re.compile(r'(?i)(?:\.bak(?:_|$)|\.old$|\.orig$|\.tmp$|~$)')
+BACKUP_RE = re.compile(r'(?i)(?:\.bak(?:[_\d.-]|$)|\.old(?:$|[._-])|\.orig(?:$|[._-])|\.tmp(?:$|[._-])|~$)')
 SENSITIVE_NAME_RE = re.compile(r'(?i)(?:^|/)(?:\.env(?:\.|$)|id_rsa$|id_ed25519$|.*\.(?:p12|pfx|key)$|credentials\.(?:json|ya?ml|toml|ini|txt)$|secrets?\.(?:json|ya?ml|toml|ini|txt)$)')
 OWN_MAP_RE = re.compile(r'(?i)^/?src/.*\.map$')
 PROPRIETARY_PY_RE = re.compile(r'(?i)(?:^|/)mcptoai_agent/.*\.py$')
@@ -17,7 +17,7 @@ SECRET_PATTERNS = {
 }
 PATH_PATTERNS = {
     'developer macOS home path': re.compile(rb'/Users/(?:ahmetbaktiaya|[^/\x00\r\n ]+)/Documents/Projects/MCPtoAI', re.I),
-    'developer Windows project path': re.compile(rb'C:\\\\Users\\\\[^\\\x00\r\n]+\\\\Documents\\\\Projects\\\\MCPtoAI', re.I),
+    'developer Windows project path': re.compile(rb'C:\\+Users\\+[^\\\x00\r\n]+\\+Documents\\+Projects\\+MCPtoAI', re.I),
     'server home path': re.compile(rb'/home/bktyserver/', re.I),
 }
 

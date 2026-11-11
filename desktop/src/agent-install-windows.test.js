@@ -18,5 +18,7 @@ try{
   assert.equal(set({version:'0.1.4',sha256:'z'},{version:'0.1.5',sha256:'a'}).updateAvailable,false,'eski sürüme geri dönülmemeli');
   assert.equal(set({version:'0.1.5',sha256:'b'},{version:'0.1.5'}).updateAvailable,false,'kurulu özet bilinmiyorsa aynı sürüm yeniden kurulmaz');
   assert.equal(set({version:'0.1.5',sha256:'b'},null).updateAvailable,false,'hiç kurulmamışsa güncelleme değil ilk kurulum akışı');
-  console.log('agent-install-windows status: 6/6 OK');
+  fs.writeFileSync(m.paths(res).exe,'legacy binary');
+  assert.equal(set({version:'0.2.8',sha256:'b'},null).updateAvailable,true,'0.2.5 legacy binary without version.json must upgrade');
+  console.log('agent-install-windows status: 7/7 OK');
 }finally{fs.rmSync(tmp,{recursive:true,force:true})}

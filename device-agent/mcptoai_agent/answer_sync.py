@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+import httpx
 from .history import history_provider, selected_history_provider_name
 
 logger=logging.getLogger('mcptoai.answer_sync')
@@ -10,6 +11,8 @@ async def sync_answers(cfg, journal):
     provider=history_provider(cfg)
     managed=selected_history_provider_name(cfg)=='mcptoai'
     for sid, entries in list(journal.data.items()):
+        if sid in getattr(journal, '_answer_sync_missing', set()):
+            continue
         for item in list(entries):
             if item.get('history_saved') or item.get('event',{}).get('type')!='text': continue
             ev=item['event']
@@ -28,6 +31,12 @@ async def sync_answers(cfg, journal):
                         await provider.add_message(sid,role='assistant',content=ev.get('text',''),model=ev.get('model',''),tool_data={'mcptoai_event_key':key})
                 item['history_saved']=True
                 journal._save()
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404:
+                    journal._answer_sync_missing = getattr(journal, '_answer_sync_missing', set()) | {sid}
+                    logger.warning('Answer history sync stopped: chat no longer exists (HTTP 404)')
+                    break
+                logger.warning('Answer history sync pending: HTTP %s', exc.response.status_code)
             except Exception as exc:
                 logger.warning('Answer history sync pending for %s: %s',sid,type(exc).__name__)
 

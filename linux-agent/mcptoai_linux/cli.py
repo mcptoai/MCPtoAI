@@ -754,7 +754,8 @@ Common tasks:
 Run `mcptoai <command> --help` for command-specific examples and safety notes.
 Documentation: https://mcptoai.com/""",
     )
-    p.add_argument("--version", action="version", version=f"mcptoai {__version__}")
+    from .build_info import version_string
+    p.add_argument("--version", action="version", version=version_string(__version__))
     sub = p.add_subparsers(dest="cmd", required=True, metavar="<command>")
 
     def leaf(name, help_text, description, epilog=None):
