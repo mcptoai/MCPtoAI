@@ -155,7 +155,7 @@ class RelayClient:
     async def _send_event(self,session_id,event,turn_id=None):
         sid=str(session_id or "")
         seq=self._event_seq.get(sid,0)+1; self._event_seq[sid]=seq
-        envelope={"type":"event","session_id":sid,"seq":seq,"event_epoch":self._event_epoch,"event":event}
+        envelope={"type":"event","session_id":sid,"seq":seq,"event_epoch":self._event_epoch,"event":event,"recorded_at":time.time()}
         if turn_id is not None:
             envelope['turn_id']=turn_id
             turns=self._turn_events.setdefault(sid,collections.OrderedDict())
@@ -169,6 +169,19 @@ class RelayClient:
             for old_sid in list(self._event_journal)[:-50]:
                 self._event_journal.pop(old_sid,None); self._event_seq.pop(old_sid,None)
                 self._turn_state.pop(old_sid,None); self._turn_events.pop(old_sid,None)
+        if event.get('type') == 'done' and turn_id is not None:
+            current_turn = self._turn_events.get(sid, {}).get(turn_id, ())
+            if any(e.get('event', {}).get('type') == 'text' for e in current_turn):
+                old = self._event_journal.get(sid)
+                if old is not None:
+                    self._event_journal[sid] = collections.deque(
+                        (e for e in old if not (
+                            e.get('event', {}).get('type') == 'error'
+                            and e.get('turn_id') != turn_id)), maxlen=500)
+                for tid, events in self._turn_events.get(sid, {}).items():
+                    if tid != turn_id:
+                        self._turn_events[sid][tid] = collections.deque(
+                            (e for e in events if e.get('event', {}).get('type') != 'error'), maxlen=500)
         await self._send(envelope)
 
     async def _handle_event_replay_request(self,msg):
@@ -176,6 +189,12 @@ class RelayClient:
         if not sid or len(sid)>128 or mode not in ('after_seq','active_turn','last_turn'): return
         if mode=='after_seq' and (not isinstance(after,int) or isinstance(after,bool) or after<0): return
         if mode!='after_seq' and 'after_seq' in msg: return
+        if not any(sid in store for store in (self._event_journal, self._turn_events, self._turn_state)):
+            logger.info("Replay requested for unknown local session; returning empty completion")
+            if self.ws is not None:
+                await self._send({"type":"replay_complete","session_id":sid,"mode":mode,
+                                  "turn_id":None,"through_seq":0,"event_epoch":self._event_epoch})
+            return
         current=asyncio.current_task(); prior=self._replay_tasks.get(sid)
         if prior is not None and prior is not current and not prior.done(): return
         self._replay_tasks[sid]=current

@@ -96,6 +96,15 @@ def _bool_env(name: str) -> bool:
 def main() -> None:
     _configure_console_encoding()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    if "connect" in sys.argv[1:] or "chatgpt-auth" in sys.argv[1:]:
+        from logging.handlers import RotatingFileHandler
+        import os
+        from pathlib import Path
+        logdir = (Path(os.environ.get("LOCALAPPDATA", Path.home()/"AppData"/"Local"))/"MCPtoAI"/"Logs") if os.name == "nt" else (Path.home()/"Library"/"Logs"/"MCPtoAI")
+        logdir.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(logdir/"agent-error.log", maxBytes=2*1024*1024, backupCount=3, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+        logging.getLogger().addHandler(handler)
     p = argparse.ArgumentParser(prog="mcptoai-agent")
     p.add_argument("--version", action="store_true", help="show version and build commit")
     sub = p.add_subparsers(dest="cmd")
@@ -111,6 +120,9 @@ def main() -> None:
     sub.add_parser("clear-local-data")
     ks=sub.add_parser("key-status"); ks.add_argument("provider")
     sub.add_parser("provider-registry")
+    sw=sub.add_parser("siwc-web"); sw.add_argument("action",choices=["status","on","off"])
+    siwc = sub.add_parser("chatgpt-auth")
+    siwc.add_argument("action", choices=("status", "login", "logout", "clear-local", "cleanup-unlinked"))
     sub.add_parser("add-mcp-json")
     rm=sub.add_parser("remove-mcp"); rm.add_argument("server_id")
     mas=sub.add_parser("mcp-auth-status"); mas.add_argument("server_id")
@@ -127,10 +139,12 @@ def main() -> None:
     sub.add_parser("cloud-ipc-json")
     sub.add_parser("cloud-ipc-jsonl")
     sub.add_parser("connect")
+    sub.add_parser("supervise")
     ds=sub.add_parser("discover-mcp"); ds.add_argument("server_id")
     sub.add_parser("list-models")
     sub.add_parser("probe-provider")
     shell_access=sub.add_parser("shell-access"); shell_access.add_argument("action",choices=["status","on","off"])
+    siwc_preview=sub.add_parser("siwc-preview"); siwc_preview.add_argument("action",choices=["status","on","off"])
     perm=sub.add_parser("permission"); perm.add_argument("action",choices=["status","request"]); perm.add_argument("kind",choices=["screen"])
     sk=sub.add_parser("skills")
     sk_sub=sk.add_subparsers(dest="skills_action",required=True)
@@ -239,12 +253,64 @@ def main() -> None:
     elif args.cmd == "google-drive-mcp":
         from .google_drive_integration import build_google_drive_mcp
         build_google_drive_mcp().run(transport='stdio',show_banner=False)
+    elif args.cmd == "chatgpt-auth":
+        from .config import local_permission
+        if not local_permission('siwc_enabled'):
+            print(json.dumps({"ok": False, "error": "ChatGPT Preview is off. Enable it in Desktop settings."}))
+            return
+        from . import siwc_auth
+        try:
+            result = {"status": siwc_auth.status, "login": siwc_auth.sign_in, "logout": siwc_auth.sign_out, "cleanup-unlinked": siwc_auth.cleanup_unlinked, "clear-local": siwc_auth.clear_local}[args.action]()
+            print(json.dumps({"ok": True, **result}))
+        except Exception as exc:
+            import traceback
+            # Never write exception arguments, URLs or local variables to disk:
+            # OAuth transport exceptions may contain bearer tokens or authorization codes.
+            # Stack frames (file/function/line) plus a safe, bounded reason retain diagnostics.
+            if isinstance(exc, PermissionError) and 'eski bir ChatGPT bağlantısı' in str(exc):
+                reason = 'Bu cihazda eski bir ChatGPT bağlantısı var; önce temizleyin.'
+            elif isinstance(exc, PermissionError) and 'Plan kullanımı izni verilmedi' in str(exc):
+                reason = 'Plan kullanımı izni verilmedi. https://chatgpt.com/settings/usage'
+            elif isinstance(exc, PermissionError):
+                reason = 'ChatGPT bağlantısı bu MCPtoAI hesabına ait değil veya erişim reddedildi.'
+            elif isinstance(exc, TimeoutError):
+                reason = 'ChatGPT bağlantısı zaman aşımına uğradı.'
+            else:
+                reason = 'ChatGPT ' + args.action + ' başarısız. Ayrıntılar Agent hata günlüğünde.'
+            safe_type = type(exc).__name__
+            safe_stack = ''.join(traceback.format_list(traceback.extract_tb(exc.__traceback__)))
+            logging.getLogger('mcptoai.siwc').error('SIWC %s failed: %s: %s\n%s',
+                                                    args.action, safe_type, reason, safe_stack)
+            print(json.dumps({"ok": False, "error": reason, "error_type": safe_type}))
     elif args.cmd == "provider-registry":
         from .provider_registry import registry
         providers = registry(settings.user_settings.get("custom_providers") or {})
         # Return presence only; provider secrets never leave the OS credential store.
+        from .config import local_permission
+        preview_enabled = local_permission('siwc_enabled')
         for provider_id, meta in providers.items():
-            meta["has_key"] = False if meta.get("key") is False else bool(get_secret(api_key_name(provider_id)))
+            try:
+                if provider_id == "chatgpt":
+                    if not preview_enabled:
+                        meta["has_key"] = False
+                        meta["linked"] = False
+                        meta["reason"] = "preview_disabled"
+                    else:
+                        from .siwc_auth import status
+                        state = status()
+                        meta["has_key"] = state["connected"] and state["sharing"]
+                        meta["sharing"] = state["sharing"]
+                        meta["linked"] = state["linked"]
+                        meta["reason"] = state["reason"]
+                        meta["usage_url"] = "https://chatgpt.com/settings/usage"
+                else:
+                    meta["has_key"] = False if meta.get("key") is False else bool(get_secret(api_key_name(provider_id)))
+            except Exception:
+                meta["has_key"] = False
+                meta["error"] = "Provider status unavailable"
+                if provider_id == "chatgpt":
+                    meta["linked"] = False
+                    meta["reason"] = "status_unavailable"
         print(json.dumps(providers))
     elif args.cmd == "key-status":
         print("yes" if get_secret(api_key_name(args.provider)) else "no")
@@ -323,16 +389,20 @@ def main() -> None:
                 requested_provider=str(d.get('provider') or settings.provider).strip()
                 info=registry(settings.user_settings.get('custom_providers') or {}).get(requested_provider)
                 if not info or info.get('chat') is False: raise ValueError('Unsupported chat provider')
-                if info.get('key',True) and not get_secret(api_key_name(requested_provider)): raise RuntimeError('Provider API key is not configured')
+                if requested_provider == "chatgpt":
+                    from .siwc_auth import status
+                    if not status()["connected"]: raise RuntimeError("ChatGPT sign-in required")
+                elif info.get('key',True) and not get_secret(api_key_name(requested_provider)): raise RuntimeError('Provider API key is not configured')
                 provider_cfg=replace(settings,provider=requested_provider,openai_base_url=info.get('base_url') or (settings.openai_base_url if requested_provider==settings.provider else None))
                 requested_model=str(d.get('model') or provider_cfg.model).strip()
                 if not requested_model or len(requested_model)>160 or any(ord(c)<32 for c in requested_model): requested_model=provider_cfg.model
                 # Anahtar değişirse (Desktop set/remove-key) eski anahtarlı oturum kullanılmaz.
                 from .secret_store import provider_key_fingerprint
-                session_key=f'{sid}:{requested_provider}:{requested_model}:{provider_key_fingerprint(requested_provider)}'
+                credential_identity = provider_key_fingerprint(requested_provider) if requested_provider != 'chatgpt' else 'oauth'
+                session_key=f'{sid}:{requested_provider}:{requested_model}:{credential_identity}'
                 session=sessions.get(session_key)
                 if session is None:
-                    provider=make_provider(provider_cfg); provider.model=requested_model
+                    provider=make_provider(provider_cfg, siwc_origin="desktop-local", siwc_user_initiated=True); provider.model=requested_model
                     remote_rules={name: __import__("mcptoai_agent.policy",fromlist=["Decision"]).Decision((remote_runtime._remote_tool_map[name][0].get("tools") or {}).get(remote_runtime._remote_tool_map[name][1],"confirm")) for name in remote_runtime._remote_tool_specs}
                     session=sessions[session_key]=AgentSession(provider_cfg,provider,build_server(provider_cfg),policy=ToolPolicy(rules={**load_rules(),**remote_rules}),remote_tools=list(remote_runtime._remote_tool_specs.values()),remote_caller=remote_runtime._call_remote_tool,server_aliases=remote_runtime._server_aliases())
                 async def emit(event):
@@ -481,6 +551,22 @@ def main() -> None:
             else:
                 msg = f"{type(exc).__name__}: {exc}"
             print(json.dumps({"ok": False, "error": msg}), flush=True)
+    elif args.cmd == "siwc-web":
+        from .config import local_permission, save_local_permission
+        if args.action == "on":
+            if not local_permission("siwc_enabled"):
+                print(json.dumps({"ok":False,"error":"Enable Desktop Preview first."}))
+                return
+            save_local_permission("siwc_web_enabled",True)
+        elif args.action == "off":
+            save_local_permission("siwc_web_enabled",False)
+        print(json.dumps({"ok":True,"enabled":local_permission("siwc_enabled") and local_permission("siwc_web_enabled")}))
+    elif args.cmd == "siwc-preview":
+        from .config import local_permission, save_local_permission
+        if args.action in ("on", "off"):
+            save_local_permission("siwc_enabled", args.action == "on")
+            if args.action == "off": save_local_permission("siwc_web_enabled",False)
+        print(json.dumps({"enabled": local_permission("siwc_enabled"), "web_allowed": local_permission("siwc_enabled") and local_permission("siwc_web_enabled")}))
     elif args.cmd == "shell-access":
         # Yerel izin: yalnızca bu cihazda çalışan komutla değiştirilir (relay/web değiştiremez).
         from .config import local_permission, save_local_permission
@@ -511,7 +597,12 @@ def main() -> None:
             print(f"PHP security [{php.status.upper()}]: {php.detail}")
         if not settings.auth0_domain or not settings.auth0_device_client_id:
             raise SystemExit("MCPtoAI production Auth0 configuration is incomplete.")
+    elif args.cmd == "supervise":
+        from .agent_supervisor import run
+        raise SystemExit(run())
     elif args.cmd == "connect":
+        from .agent_signals import install_connect_sigterm_handler
+        install_connect_sigterm_handler()
         from .relay_client import run_relay_client
         from .agent_instance_lock import agent_instance_lock
         from .credential_lock import CredentialLockTimeout

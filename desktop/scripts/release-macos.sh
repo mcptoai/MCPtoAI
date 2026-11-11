@@ -59,6 +59,7 @@ codesign --verify --strict --verbose=2 "$BUNDLED_HELPER"
 codesign --verify --deep --strict --verbose=2 "$BUNDLED_AGENT_APP"
 codesign -dv --verbose=2 "$BUNDLED_AGENT" 2>&1 | grep -F "TeamIdentifier=WCUHC7RX92"
 codesign --verify --deep --strict --verbose=2 "$APP"
+node scripts/verify-agent-integrity.js "$BUNDLED_AGENT_APP/Contents/Resources/agent" "$APP/Contents/Resources/agent-version.json"
 # Notarize and staple the final app BEFORE creating the DMG.
 APP_ZIP="dist/MCPtoAI-${DESKTOP_VERSION}-arm64-app-notary.zip"
 ditto -c -k --keepParent "$APP" "$APP_ZIP"
@@ -81,6 +82,7 @@ npx electron-builder --mac zip --prepackaged "$APP" --config.mac.identity="$BUIL
 UPDATE_ZIP="dist/MCPtoAI-${DESKTOP_VERSION}-arm64.zip"
 UPDATE_BLOCKMAP="${UPDATE_ZIP}.blockmap"
 [[ -s "$UPDATE_ZIP" && -s "$UPDATE_BLOCKMAP" ]] || { print -u2 'Missing updater ZIP/blockmap'; exit 3; }
+node scripts/verify-updater-artifacts.js dist latest-mac.yml "$DESKTOP_VERSION" .zip
 # Verify the actual application inside the ZIP, not only the source app.
 ZIP_CHECK_DIR=$(mktemp -d "${TMPDIR:-/tmp/}mcptoai-zip-verify.XXXXXXXX")
 trap 'rm -rf "$ZIP_CHECK_DIR"' EXIT

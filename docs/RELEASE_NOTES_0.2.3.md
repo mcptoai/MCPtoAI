@@ -1,31 +1,27 @@
-# MCPtoAI 0.2.3 — Release notes
+# MCPtoAI 0.2.3 — Release notes (DRAFT, not published)
 
-MCPtoAI 0.2.3 improves how your paired computer handles local tools, sensitive files, and approved file transfers. Features vary by operating system.
+**Status:** preparation only. These notes describe the planned 0.2.3 release compared with the currently published 0.1.18 channel. Not a claim that 0.2.3 is already available via OTA.
 
-## What's new
+## Highlights since 0.1.18
 
-- **Skills on macOS and Windows:** manage agent skills with preflight checks, access restrictions for skill files and data, and device-side policy enforcement. Managed Skills are not yet available on Linux.
-- **Universal File Artifacts:** send supported documents, images, audio, and video from a paired device to chat after explicit approval. Transfers use authenticated downloads, file-size and workspace checks, expiration limits, and cleanup. Chat can play supported MP4 videos. Returning a file path alone does not upload that file.
-- **Protected locations:** built-in file tools check sensitive directories and filenames, including application credentials, browser profiles, SSH keys, shell histories, and Windows AppData. Symlinks and Windows path aliases are resolved before file access.
-- **Checks before approval:** file paths, file type, extension, size, and permitted workspace are checked before a confirmation prompt appears. Approval cards identify file types and sizes and distinguish creating a file from overwriting one.
-- **Clearer tool results:** actions distinguish `completed`, `failed`, `blocked`, and `denied`. Statuses are communicated with text and icons, not color alone.
-- **Safer approval details:** the agent, not model-supplied tool arguments, determines file metadata shown in approval prompts for supported file operations.
-- **Video controls:** in-chat playback includes native controls and accessible seek buttons, using five-second steps for short clips and ten-second steps for longer clips.
-- **Cleaner API keys:** when you paste an API key into the Linux CLI or Device Agent CLI, control characters are removed. Keys previously saved with these characters are automatically repaired.
-- **More reliable Linux AI connections:** TLS fallback handling helps Linux connect to AI providers when the usual certificate verification path is unavailable.
+- **Skills (macOS and Windows only):** managed agent skills, preflight validation, controlled skill-file/data access and policy enforcement. **Linux Skills parity is not claimed.**
+- **Universal File Artifacts:** explicit user-approved device-to-chat transfers; supported document, audio, image and video formats; authenticated download and in-chat MP4 playback. Artifact limits, workspace boundaries, expiration and server pruning are enforced. A file is not uploaded merely by returning its local path.
+- **Protected locations:** safeguards for agent credentials and application data, cloud secrets, browser profiles, shell histories, SSH/other private keys and sensitive filenames. Windows AppData is protected. The policy applies to built-in file tools and resolves symbolic links and Windows path aliases.
+- **Pre-approval validation:** file path, regular-file status, extension, size and workspace checks run before asking the user to approve. Artifact confirmation cards display agent-derived file type/size, and write cards distinguish new files from overwrites.
+- **Four tool result states:** `completed`, `failed`, `blocked`, and `denied`, with backward-compatible handling for older agents. Web displays icons and text, not only colors.
+- **0.2.3 security fix:** model-provided `_approval_meta` is removed from tool arguments; only the agent may attach computed metadata for `send_artifact` and `write_file`. Web ignores metadata for all other tools. The new anti-spoof tests also cover `run_command`.
+- **Video usability:** native player controls plus accessible five-second (short clips) or ten-second seek buttons (long clips).
+- **Maintenance:** artifact cleanup includes expired records, orphan cleanup and dry-run reporting; storage/disk monitoring has alert thresholds.
 
-## Security and known limitations
+## Security model and known limitations
 
-- **Terminal commands are not sandboxed.** If terminal access is enabled and a command is approved or otherwise permitted, it can access resources available to your operating-system account. The protected-file policy for built-in file tools does not sandbox `run_command`, `run_in_project`, background jobs, or external MCP tools. Review commands before approving them.
-- **Keynote `.key` files are blocked.** The `.key` extension is also used for private keys, so this version does not provide a Keynote-specific exception.
-- **Linux wheel packages are not cryptographically signed.** When installing a downloaded wheel, verify its published SHA-256 and SHA-512 checksums against a trusted release source. A checksum verifies the downloaded bytes against the reference; it is not a substitute for a trusted signature.
-- Managed Skills currently support macOS and Windows, not Linux. File transfer availability and supported file types may vary by platform.
-- Local permissions reduce unintended access, but they are not a substitute for operating-system account security and careful review of powerful tools.
+- **Terminal commands can access anything your OS account can; approval cards are the only barrier.** `run_command`, `run_in_project`, background jobs and external MCP tools are not sandboxed by the built-in file-path protection policy.
+- **Keynote .key files are blocked because the extension is also used for private keys.** No Keynote-specific exception is provided in 0.2.3.
+- Linux wheel is **unsigned**; verify its published SHA-256/SHA-512 and provenance. PyPI trusted publishing/attestations are a future consideration, not a feature already provided.
+- The security policy reduces accidental sensitive file access but is not an OS-level security boundary against arbitrary commands executed with the user's privileges.
+- File-transfer/playback validation performed on Linux does not by itself prove every macOS or Windows user workflow; final release gate must include real transfers from both platforms.
+- Existing long-running chats may temporarily disconnect during separately authorized web restarts or Agent upgrades. Preserving Keychain, config and device identity is mandatory.
 
-## Upgrading
+## Release boundary
 
-- **macOS and Windows:** when version 0.2.3 is offered in MCPtoAI Desktop, use **Check for Updates**, download the update, and choose **Restart & Install**. Reopen Desktop and confirm both the Desktop and Device Agent versions. Keep the device paired and review permissions after updating.
-- **Linux CLI:** `python3 -m pip install --upgrade mcptoai`. After upgrading, check the installed version with `mcptoai --version`.
-- **Docker:** `docker pull ghcr.io/mcptoai/mcptoai:0.2.3`. Keep your persistent configuration volume when replacing a container; verify the image digest from the trusted release information.
-
-See [SECURITY.md](../SECURITY.md) for reporting security issues and the [Linux guide](../linux-agent/README.md) for platform-specific setup.
+This document is **read-only planning**. No installation, notarization, signing, backend migration, web activation, upload to release directories, change to update manifests or public release is authorized by these notes. Source preparation and QA do not turn on an OTA channel.

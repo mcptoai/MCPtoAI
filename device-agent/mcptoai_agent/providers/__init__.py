@@ -9,11 +9,18 @@ from .base import AssistantTurn, Provider, ToolCall, ToolSpec
 __all__ = ["AssistantTurn", "Provider", "ToolCall", "ToolSpec", "make_provider"]
 
 
-def make_provider(cfg: Settings) -> Provider:
+def make_provider(cfg: Settings, *, siwc_origin="unknown", siwc_user_initiated=False, siwc_web_authorized=False) -> Provider:
     from ..provider_registry import preset,registry
     info=preset(cfg.provider)
     if not info and cfg.provider.startswith("custom-"):
         info=registry(cfg.user_settings.get("custom_providers") or {}).get(cfg.provider)
+    if cfg.provider == 'chatgpt':
+        from .siwc_provider import SIWCProvider
+        from ..siwc_auth import access_token
+        import asyncio
+        async def supplier():
+            return await asyncio.to_thread(access_token)
+        return SIWCProvider(cfg.model, supplier, origin=siwc_origin, user_initiated=siwc_user_initiated, web_authorized=siwc_web_authorized)
     if cfg.provider == "anthropic":
         key=get_secret(api_key_name("anthropic"))
         if not key: raise RuntimeError("Anthropic API key is not configured.")

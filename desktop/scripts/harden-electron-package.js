@@ -4,6 +4,8 @@ const path = require('path');
 const asar = require('@electron/asar');
 const terser = require('terser');
 
+const UNSAFE_PACKAGED_FILE_RE = /(?:\.bak(?:[_\d.-]|$)|\.old(?:$|[._-])|\.orig(?:$|[._-])|\.tmp(?:$|[._-])|~$)/i;
+
 async function walk(dir) {
   const out = [];
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -57,9 +59,17 @@ module.exports = async function hardenElectronPackage(context) {
       }
     }
 
+    const excluded = [];
+    for (const file of await walk(extracted)) {
+      if (UNSAFE_PACKAGED_FILE_RE.test(path.basename(file))) {
+        fs.rmSync(file);
+        excluded.push(path.relative(extracted, file));
+      }
+    }
+
     await asar.createPackage(extracted, rebuilt);
     fs.copyFileSync(rebuilt, appAsar);
-    console.log(`MCPtoAI package hardening: minified ${minified} JS files, removed ${mapsRemoved} source maps`);
+    console.log(`MCPtoAI package hardening: minified ${minified} JS files, removed ${mapsRemoved} source maps, excluded ${excluded.length} backup/temp files`);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

@@ -1,6 +1,7 @@
 """Retry completed assistant answers independently of the browser connection."""
 import asyncio
 import logging
+import httpx
 from .local_history import LocalHistoryStore
 
 logger=logging.getLogger('mcptoai.answer_sync')
@@ -8,6 +9,8 @@ logger=logging.getLogger('mcptoai.answer_sync')
 async def sync_answers(cfg,journal):
     local=cfg.user_settings.get('history_provider')=='local'
     for sid,items in list(journal.data.items()):
+        if sid in getattr(journal, '_answer_sync_missing', set()):
+            continue
         for item in list(items):
             if item.get('history_saved') or item.get('event',{}).get('type')!='text':continue
             ev=item['event'];key=f"{sid}:{item.get('event_epoch','')}:{item.get('turn_id','')}:{item.get('seq','')}"
@@ -21,9 +24,20 @@ async def sync_answers(cfg,journal):
                 else:
                     from .relay_client import handle_cloud_chat_request
                     result=await handle_cloud_chat_request(cfg,{'action':'cloud_chat_add_message','session_id':sid,'role':'assistant','content':ev.get('text',''),'model':ev.get('model',''),'tool_data':{'mcptoai_event_key':key}})
-                    if not result.get('ok'):continue
+                    if not result.get('ok'):
+                        if result.get('status') == 404:
+                            journal._answer_sync_missing = getattr(journal, '_answer_sync_missing', set()) | {sid}
+                            logger.warning('Answer history sync stopped: chat no longer exists (HTTP 404)')
+                            break
+                        continue
                 item['history_saved']=True
                 journal._save()
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404:
+                    journal._answer_sync_missing = getattr(journal, '_answer_sync_missing', set()) | {sid}
+                    logger.warning('Answer history sync stopped: chat no longer exists (HTTP 404)')
+                    break
+                logger.warning('Answer history sync pending: HTTP %s', exc.response.status_code)
             except Exception as exc:
                 logger.warning('Answer history sync pending for %s: %s',sid,type(exc).__name__)
 

@@ -1,7 +1,7 @@
 """Outbound WebSocket client for MCPtoAI relay. No inbound port is opened."""
 from __future__ import annotations
 from .paths import config_dir
-import asyncio, collections, json, logging, random, uuid, os, time
+import asyncio, collections, json, logging, random, uuid, os, time, hashlib
 from urllib.parse import urlparse, parse_qs
 import websockets
 import os
@@ -144,7 +144,7 @@ class RelayClient:
     async def _send_event(self,session_id,event,turn_id=None):
         sid=str(session_id or "")
         seq=self._event_seq.get(sid,0)+1; self._event_seq[sid]=seq
-        envelope={"type":"event","session_id":sid,"seq":seq,"event_epoch":self._event_epoch,"event":event}
+        envelope={"type":"event","session_id":sid,"seq":seq,"event_epoch":self._event_epoch,"event":event,"recorded_at":time.time()}
         if turn_id is not None:
             envelope["turn_id"]=turn_id
             turns=self._turn_events.setdefault(sid,collections.OrderedDict())
@@ -162,6 +162,19 @@ class RelayClient:
             for old_sid in list(self._event_journal)[:-50]:
                 self._event_journal.pop(old_sid,None); self._event_seq.pop(old_sid,None)
                 self._turn_state.pop(old_sid,None); self._turn_events.pop(old_sid,None)
+        if event.get('type') == 'done' and turn_id is not None:
+            current_turn = self._turn_events.get(sid, {}).get(turn_id, ())
+            if any(e.get('event', {}).get('type') == 'text' for e in current_turn):
+                old = self._event_journal.get(sid)
+                if old is not None:
+                    self._event_journal[sid] = collections.deque(
+                        (e for e in old if not (
+                            e.get('event', {}).get('type') == 'error'
+                            and e.get('turn_id') != turn_id)), maxlen=500)
+                for tid, events in self._turn_events.get(sid, {}).items():
+                    if tid != turn_id:
+                        self._turn_events[sid][tid] = collections.deque(
+                            (e for e in events if e.get('event', {}).get('type') != 'error'), maxlen=500)
         await self._send(envelope)
 
     async def _handle_event_replay_request(self,msg):
@@ -169,7 +182,16 @@ class RelayClient:
         after=msg.get("after_seq")
         if not sid or len(sid)>128 or mode not in ("after_seq","active_turn","last_turn"): return
         if mode=="after_seq" and (not isinstance(after,int) or isinstance(after,bool) or after<0): return
+        started=time.monotonic(); sent_count=0
+        session_hash=hashlib.sha256(sid.encode("utf-8")).hexdigest()[:16]
         # Aynı oturumun önceki replay isteği tamamlanmadan ikinci replay başlatılmaz.
+        if not any(sid in store for store in (self._event_journal, self._turn_events, self._turn_state)):
+            logger.info("Replay requested for unknown local session; returning empty completion")
+            if self.ws is not None:
+                await self._send({"type":"replay_complete","session_id":sid,"mode":mode,
+                                  "turn_id":None,"through_seq":0,"event_epoch":self._event_epoch})
+                logger.info("replay_complete session_hash=%s mode=%s events_sent=0 duration_ms=%d", session_hash,mode,round((time.monotonic()-started)*1000))
+            return
         current=asyncio.current_task()
         prior=self._replay_tasks.get(sid)
         if prior is not None and prior is not current and not prior.done(): return
@@ -188,11 +210,12 @@ class RelayClient:
                     packet={**envelope,"replay":mode}
                     try: await socket.send(json.dumps(packet,ensure_ascii=False,default=str))
                     except Exception: return
-                    cursor=envelope["seq"]
+                    cursor=envelope["seq"]; sent_count+=1
                     await asyncio.sleep(0.125)
             if self.ws is socket and socket is not None:
                 try: await socket.send(json.dumps({"type":"replay_complete","session_id":sid,"mode":mode,"turn_id":turn_id,"through_seq":cursor,"event_epoch":self._event_epoch}))
                 except Exception: return
+                logger.info("replay_complete session_hash=%s mode=%s events_sent=%d duration_ms=%d", session_hash,mode,sent_count,round((time.monotonic()-started)*1000))
         finally:
             if self._replay_tasks.get(sid) is current: self._replay_tasks.pop(sid,None)
 
@@ -629,7 +652,9 @@ class RelayClient:
             await self._send({"type":"models","provider":cfg.provider,"current_model":cfg.model if cfg.provider==self.cfg.provider else "","models":models})
         except Exception as exc:
             logger.exception("Model discovery failed")
-            await self._send({"type":"models","provider":str(provider_id or self.cfg.provider),"current_model":"","models":[],"error":f"{type(exc).__name__}: {exc}"})
+            from .provider_errors import friendly_provider_error
+            pid=str(provider_id or self.cfg.provider)
+            await self._send({"type":"models","provider":pid,"current_model":"","models":[],"error":friendly_provider_error(pid,exc,getattr(self.cfg,"custom_providers",None))})
 
     async def _run_message(self,msg):
         sid=str(msg.get("session_id") or str(uuid.uuid4()))
@@ -643,6 +668,25 @@ class RelayClient:
             await self._send_event(sid,{"type":"error","code":"turn_in_progress","message":"A turn is already running in this conversation. Wait for it to finish or stop it first."})
             return
         requested_provider=str(msg.get("provider") or self.cfg.provider).strip()
+        siwc_web_authorized=False
+        if requested_provider == 'chatgpt':
+            from .siwc_policy import authorize_web_turn
+            identity=msg.get('relay_verified_identity')
+            message_id=str(msg.get('message_id') or '').strip()
+            try:
+                uuid.UUID(message_id)
+                fresh_id=True
+            except (ValueError,TypeError,AttributeError):
+                fresh_id=False
+            try:
+                authorize_web_turn(identity,interactive=(msg.get('type')=='message' and
+                    isinstance(msg.get('message'),str) and bool(msg['message'].strip())),
+                    fresh_message_id=fresh_id,replay=bool(msg.get('replay') or msg.get('is_replay')),
+                    job_or_sampling=bool(msg.get('job_id') or msg.get('sampling') or msg.get('capability')))
+            except PermissionError as exc:
+                await self._send_event(sid,{'type':'error','message':str(exc)})
+                return
+            siwc_web_authorized=True
         try: provider_cfg=self._chat_provider_cfg(requested_provider)
         except Exception as exc:
             await self._send_event(sid,{"type":"error","message":f"{type(exc).__name__}: {exc}"}); return
@@ -665,7 +709,7 @@ class RelayClient:
             oldest=min(self._session_last_used,key=self._session_last_used.get)
             self.sessions.pop(oldest,None); self._session_last_used.pop(oldest,None)
         if session is None:
-            provider=make_provider(provider_cfg)
+            provider=(make_provider(provider_cfg,siwc_origin="web-relay",siwc_user_initiated=True,siwc_web_authorized=True) if siwc_web_authorized else make_provider(provider_cfg))
             provider.model=requested_model
             session=self.sessions[session_key]=AgentSession(provider_cfg,provider,build_server(provider_cfg, artifact_session_id=sid),policy=ToolPolicy(rules={**load_rules(),**{name:Decision((self._remote_tool_map[name][0].get("tools") or {}).get(self._remote_tool_map[name][1],"confirm")) for name in self._remote_tool_specs}}),remote_tools=list(self._remote_tool_specs.values()),remote_caller=self._call_remote_tool,server_aliases=self._server_aliases())
         self._session_last_used[session_key]=now
@@ -728,7 +772,9 @@ class RelayClient:
             if capability: await session.run_capability(capability,text,approver,emit)
             else: await session.run(text,approver,emit,images=images,language=msg.get("language"),context=context,preferred_mcp_server_ids=preferred)
         except Exception as exc:
-            logger.exception("Agent session failed"); await emit({"type":"error","message":f"{type(exc).__name__}: {exc}"})
+            logger.exception("Agent session failed")
+            from .provider_errors import friendly_provider_error
+            await emit({"type":"error","message":friendly_provider_error(str(msg.get("provider") or self.cfg.provider),exc,getattr(self.cfg,"custom_providers",None))})
             if message_id: self._receipts.finish(message_id,"failed")
         else:
             if message_id: self._receipts.finish(message_id,"completed")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 PRESETS={
  'openai': {'name':'OpenAI','base_url':None,'key':True},
+ 'chatgpt': {'name':'ChatGPT (Sign in)','base_url':None,'key':False,'auth':'oauth'},
  'nvidia': {'name':'NVIDIA NIM','base_url':'https://integrate.api.nvidia.com/v1','key':True},
  'replicate': {'name':'Replicate','base_url':'https://api.replicate.com/v1','key':True,'chat':False,'credential_name':'REPLICATE_API_TOKEN'},
  'anthropic': {'name':'Anthropic','native':'anthropic','key':True},
