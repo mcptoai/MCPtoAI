@@ -54,11 +54,11 @@ const reconcile = async ({current,platform=process.platform,entries=list(platfor
 };
 // Persist the last successfully reconciled Desktop version, not the on-disk agent version.
 // A missing marker is a legacy installation (0.2.5 did not write this marker).
-const handoverOnStartup = async ({current,version,configRoot,platform=process.platform,enumerate=list,terminate=stop,serviceStop,serviceStart,serviceRestart,servicePid,readFile=fs.readFileSync,writeFile=fs.writeFileSync,mkdir=fs.mkdirSync,rename=fs.renameSync,unlink=fs.unlinkSync,probeVersion,log=()=>{}}) => {
+const handoverOnStartup = async ({current,version,configRoot,platform=process.platform,enumerate=list,terminate=stop,serviceStop,serviceStart,serviceRestart,servicePid,restartVerifyMs=15000,build='',readFile=fs.readFileSync,writeFile=fs.writeFileSync,mkdir=fs.mkdirSync,rename=fs.renameSync,unlink=fs.unlinkSync,probeVersion,log=()=>{}}) => {
   const marker=path.join(configRoot,'desktop-agent-handover.json');
-  const persist=()=>{log('handover marker write attempt '+marker+' version='+version);mkdir(configRoot,{recursive:true});const tmp=marker+'.'+process.pid+'.tmp';try{writeFile(tmp,JSON.stringify({version},null,2)+'\n',{mode:0o600});rename(tmp,marker);log('handover marker write success '+marker)}catch(e){try{unlink(tmp)}catch{};log('handover marker write FAILED '+marker+' '+e.message);console.error('Agent handover marker write failed',marker,e);throw e}};
-  let previous=null;
-  try {previous=JSON.parse(readFile(marker,'utf8')).version;log('handover marker read '+marker+' version='+previous)} catch(e) {log('handover marker read failed '+marker+' '+e.message);if(e.code!=='ENOENT')log('handover marker unreadable, probing running agent before any restart')}
+  const persist=()=>{log('handover marker write attempt '+marker+' version='+version+(build?' build='+build:''));mkdir(configRoot,{recursive:true});const tmp=marker+'.'+process.pid+'.tmp';try{writeFile(tmp,JSON.stringify(build?{version,build}:{version},null,2)+'\n',{mode:0o600});rename(tmp,marker);log('handover marker write success '+marker)}catch(e){try{unlink(tmp)}catch{};log('handover marker write FAILED '+marker+' '+e.message);console.error('Agent handover marker write failed',marker,e);throw e}};
+  let previous=null,previousBuild=null;
+  try {const m=JSON.parse(readFile(marker,'utf8'));previous=m.version;previousBuild=m.build||null;log('handover marker read '+marker+' version='+previous+(previousBuild?' build='+previousBuild:''))} catch(e) {log('handover marker read failed '+marker+' '+e.message);if(e.code!=='ENOENT')log('handover marker unreadable, probing running agent before any restart')}
   const targets=()=>enumerate(platform).filter(e=>e.pid!==process.pid && managed(e.exe,current,platform) && isConnect(e));
   const cleanup=async()=>{
     const entries=targets();if(entries.length<=1)return {ok:true,removed:[]};
@@ -71,8 +71,12 @@ const handoverOnStartup = async ({current,version,configRoot,platform=process.pl
       const ok=await terminate(e);removed.push({pid:e.pid,ok});if(!ok)return {ok:false,error:'Could not stop duplicate connect',removed};
     }return {ok:true,removed};
   };
-  if(previous===version){const c=await cleanup();if(!c.ok)return c;log('same version, untouched (marker)');return {ok:true,changed:false,cleanup:c.removed}};
+  // Aynı sürüm numarasıyla yeniden kurulumda (onarım kurulumu, yeniden derlenmiş paket) dosyalar
+  // değişir ama sürüm değişmez; eski agent değiştirilmiş arşivden okumaya çalışıp çöker (Error -3).
+  // Bu yüzden build kimliği de karşılaştırılır. build bilinmiyorsa (geliştirme) yalnızca sürüme bakılır.
+  if(previous===version&&(!build||previousBuild===build)){const c=await cleanup();if(!c.ok)return c;log('same version, untouched (marker)');return {ok:true,changed:false,cleanup:c.removed}};
   if(previous===null)log('no marker → one-time handover');
+  else if(previous===version)log('same version, different build ('+(previousBuild||'none')+' → '+build+') → build handover');
   else log('marker mismatch or unreadable → version handover');
   // The binary on disk may already be upgraded while an older connect process lives.
   // A missing marker MUST trigger one handover, regardless of disk --version.
@@ -83,15 +87,26 @@ const handoverOnStartup = async ({current,version,configRoot,platform=process.pl
     log('handover: '+reason+'; launchctl kickstart -k requested');
     const before=targets().map(e=>e.pid);
     const restarted=await serviceRestart();
-    if(!restarted?.ok)return {ok:false,error:'Could not restart launchd agent'};
+    // kickstart -k eski agent'ın kapanmasını bekler; güncelleme sonrası ilk açılışta bu uzun sürebilir.
+    // Zaman aşımı başarısızlık kanıtı değildir: launchd yeniden başlatmayı tamamlamış olabilir.
+    // Bu durumda karar PID doğrulamasına bırakılır ve yalnızca YENİ bir PID kabul edilir.
+    const mustBeNew=Boolean(restarted?.timedOut);
+    if(!restarted?.ok&&!mustBeNew){
+      // Uygulama paketi değiştirildiğinde eski agent kapanmış ve launchd hizmeti henüz kayıtlı olmayabilir.
+      // Bellekte eski bir agent yoksa devredilecek bir şey yoktur: sonraki başlatma yeni paketten yapılır.
+      if(before.length===0&&targets().length===0){log('handover: service restart unavailable and no agent is running; nothing to hand over');persist();return {ok:true,changed:true,noRunningAgent:true,stopped}}
+      return {ok:false,error:'Could not restart launchd agent'};
+    }
+    if(mustBeNew)log('handover: kickstart -k timed out; verifying a new launchd PID before deciding');
     const restartedAt=Date.now();
     // launchd can report no PID for several seconds after a successful kickstart.
-    const deadline=Date.now()+15000;
+    const verifyMs=mustBeNew?restartVerifyMs*2:restartVerifyMs;
+    const deadline=Date.now()+verifyMs;
     let keeper=null,observed=[];
     while(Date.now()<deadline){
       keeper=await servicePid();observed=targets();
       log('handover: launchd PID poll pid='+keeper+' connect='+observed.map(e=>e.pid).join(','));
-      if(Number.isSafeInteger(keeper)&&keeper>0&&observed.some(e=>e.pid===keeper))break;
+      if(Number.isSafeInteger(keeper)&&keeper>0&&observed.some(e=>e.pid===keeper)&&!(mustBeNew&&before.includes(keeper)))break;
       keeper=null;await sleep(250);
     }
     if(!keeper){
@@ -101,7 +116,7 @@ const handoverOnStartup = async ({current,version,configRoot,platform=process.pl
         log('handover: launchd PID unavailable, verifying post-kickstart sole connect pid='+only.pid);
         if(probeVersion&&await probeVersion()===version){persist();return {ok:true,changed:true,fallback:true,keeper:only.pid,stopped}};
       }
-      return {ok:false,error:'Cannot identify launchd agent PID after 15s',stopped};
+      return {ok:false,error:'Cannot identify launchd agent PID after '+Math.round(verifyMs/1000)+'s',stopped};
     }
     for(const entry of targets().filter(e=>e.pid!==keeper)){
       log('handover: terminating duplicate connect pid='+entry.pid+' keeper='+keeper);

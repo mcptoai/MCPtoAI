@@ -89,6 +89,18 @@ class AgentSession:
         self.remote_tools = remote_tools or []
         self.remote_caller = remote_caller
         self.server_aliases = server_aliases or {}
+        # Aktivite kaydı: relay oturum kimliği atayabilir; yerel sohbet ve testlerde varsayılan kullanılır.
+        self.activity_session_id: str | None = None
+        self.activity_store = None
+        self._activity = None
+
+    def _activity_recorder(self):
+        if self._activity is None:
+            from .activity_recorder import ActivityRecorder
+            self._activity = ActivityRecorder(self.activity_session_id, self.activity_store,
+                provider=getattr(self, "activity_provider", None),
+                model=getattr(self.provider, "model", None))
+        return self._activity
 
     async def _tool_specs(self, client: Client) -> list[ToolSpec]:
         tools = await client.list_tools()
@@ -117,6 +129,7 @@ class AgentSession:
         await emit({"type":"done","capability":capability}); return content
 
     async def run(self, user_text: str, approver: Approver, emit: Emit, images: list[dict] | None = None, language: str | None = None, context: list[dict] | None = None, preferred_mcp_server_ids: list[str] | None = None) -> str:
+        self._activity_recorder().new_turn()
         if context and not self.history:
             restored = []
             for item in context[-40:]:
@@ -164,6 +177,7 @@ class AgentSession:
         if language:
             system_prompt += f" IMPORTANT: Always write all user-facing responses in {language}, regardless of the language of tool output or web content, unless the user explicitly asks for another language."
         system_prompt += " When the user explicitly asks to deliver a completed image, video, audio, PDF, document or archive in chat, use send_artifact with the final local file path after creation. The user must approve the transfer. Never state that a file was sent until the tool confirms. File artifacts are private and temporary. Do not send private data without an explicit user request and approval."
+        system_prompt += " IMPORTANT SCREENSHOT DELIVERY: A successful capture_screen call already sends its screenshot image to the user interface. Do not call send_artifact to deliver that same screenshot again. Only call send_artifact for a separate file explicitly requested by the user; existing send_artifact approval requirements remain unchanged."
         system_prompt += " For requests to research, inspect, summarize, or analyze a website, use web_fetch to read the actual page content. Do not claim to have researched a site merely because open_url opened it in a browser. Use open_url only when the user specifically wants the page opened on their device."
         system_prompt += " IMPORTANT CONVERSATION CONTINUITY: Treat the supplied conversation history as authoritative context for references such as previous, above, earlier, that code, or that answer, including content written by a different model/provider. If the requested information is already present in conversation history, answer from that history first. Do not use filesystem, shell, web, or MCP tools merely to rediscover or re-read information already present in the conversation. Use tools only when the user asks to verify/test the current external state, when fresh external information is required, or when the needed information is absent from history. When history contains an [Exact content written to ...] block, treat that exact written content as authoritative over shortened code snippets or summaries in assistant messages, and inspect the complete relevant function before claiming a bug."
         normalized = user_text.casefold()
@@ -236,6 +250,9 @@ class AgentSession:
                     if skill_store.ACTIVE.get():
                         # Skill etkinken yapılan HER araç çağrısı skill adını taşır (denetim izi için).
                         request["skills"] = list(skill_store.ACTIVE.get())
+                    activity = self._activity_recorder().begin(call.name, request_args)
+                    request["activity_id"] = activity.activity_id
+                    request["activity"] = await activity.mark("requested")
                     await emit(request)
                     # Doğrulama onaydan ÖNCE: kurcalanmış paket, devre dışı skill ya da izinsiz yol gibi zaten reddedilecek
                     # bir çağrı için kullanıcıdan onay istenmez.
@@ -244,38 +261,62 @@ class AgentSession:
                         allowed, reason = False, "preflight_refused"
                     else:
                         # Skill talimatı bağlamdayken web_fetch gibi onaysız dış iletişim araçları onay ister (veri sızdırma).
-                        allowed, reason = await self.policy.authorize(call.name, request_args, approver, untrusted_context=bool(skill_store.ACTIVE.get()))
+                        async def tracked_approver(tool, args, _activity=activity):
+                            # Kullanıcı onayı beklenirken aşama kaydedilir (yalnızca cihazda).
+                            await _activity.mark("approval_pending", decision="pending")
+                            return await approver(tool, args)
+                        try:
+                            allowed, reason = await self.policy.authorize(call.name, request_args, tracked_approver, untrusted_context=bool(skill_store.ACTIVE.get()))
+                        except asyncio.CancelledError:
+                            # Onay beklenirken Durdur.
+                            await activity.mark("cancelled")
+                            raise
                     self._log(call.name, call.arguments, reason)
+                    if not allowed:
+                        await activity.mark("denied", decision="denied")
+                    else:
+                        if reason == "user_approved":
+                            await activity.mark("approved", decision="approved")
+                        else:
+                            activity.decision = "not_required"
+                        await activity.mark("started")
                     if not allowed:
                         content, is_error = (refusal if refusal is not None else f"Tool call was not permitted ({reason}).", True)
                     else:
-                        if self.remote_caller and call.name.startswith("mcp__"):
-                            content, is_error = await self.remote_caller(call.name, call.arguments)
-                        else:
-                            result = await client.call_tool(call.name, call.arguments, raise_on_error=False)
-                            content = chr(10).join(getattr(c, "text", str(c)) for c in result.content) or "(boş sonuç)"
-                            is_error = bool(result.is_error)
-                            if call.name == "capture_screen" and not is_error:
-                                import json as _json
-                                try:
-                                    media = _json.loads(content)
-                                    data_url = str(media.get("data_url") or "")
-                                    if media.get("kind") != "screen_capture" or not data_url.startswith("data:image/jpeg;base64,"):
-                                        raise ValueError("invalid screenshot payload")
-                                    if len(data_url.encode("ascii")) > 430 * 1024:
-                                        raise ValueError("screenshot payload too large")
-                                    await emit({
-                                        "type": "image",
-                                        "source": "capture_screen",
-                                        "data_url": data_url,
-                                        "mime": "image/jpeg",
-                                        "width": int(media.get("width") or 0),
-                                        "height": int(media.get("height") or 0),
-                                    })
-                                    content = f"Screenshot captured ({media.get('width')}x{media.get('height')}) and sent to the user interface."
-                                except Exception as exc:
-                                    content, is_error = f"Screenshot transfer failed: {type(exc).__name__}: {exc}", True
-                        if not is_error and call.name in {"list_dir", "read_file", "web_fetch", "disk_usage", "process_list"}: successful_reads.add(read_key)
+                        try:
+                            if self.remote_caller and call.name.startswith("mcp__"):
+                                content, is_error = await self.remote_caller(call.name, call.arguments)
+                            else:
+                                result = await client.call_tool(call.name, call.arguments, raise_on_error=False)
+                                content = chr(10).join(getattr(c, "text", str(c)) for c in result.content) or "(boş sonuç)"
+                                is_error = bool(result.is_error)
+                                if call.name == "capture_screen" and not is_error:
+                                    import json as _json
+                                    try:
+                                        media = _json.loads(content)
+                                        data_url = str(media.get("data_url") or "")
+                                        if media.get("kind") != "screen_capture" or not data_url.startswith("data:image/jpeg;base64,"):
+                                            raise ValueError("invalid screenshot payload")
+                                        if len(data_url.encode("ascii")) > 430 * 1024:
+                                            raise ValueError("screenshot payload too large")
+                                        await emit({
+                                            "type": "image",
+                                            "source": "capture_screen",
+                                            "data_url": data_url,
+                                            "mime": "image/jpeg",
+                                            "width": int(media.get("width") or 0),
+                                            "height": int(media.get("height") or 0),
+                                        })
+                                        content = f"Screenshot captured ({media.get('width')}x{media.get('height')}) and already delivered to the user interface. Do not call send_artifact for this screenshot."
+                                    except Exception as exc:
+                                        content, is_error = f"Screenshot transfer failed: {type(exc).__name__}: {exc}", True
+                            if not is_error and call.name in {"list_dir", "read_file", "web_fetch", "disk_usage", "process_list"}: successful_reads.add(read_key)
+                        except asyncio.CancelledError:
+                            await activity.mark("cancelled")
+                            raise
+                        except Exception:
+                            await activity.mark("failed")
+                            raise
                     if not is_error and (content.lstrip().startswith("[ERROR]") or
                                          __import__("re").match(r"^\[exit=[1-9][0-9]*\]", content)):
                         is_error = True
@@ -307,7 +348,9 @@ class AgentSession:
                                 await emit({"type": "artifact", "artifact": item})
                         except (ValueError, TypeError, AttributeError):
                             pass
-                    await emit({"type": "tool_result", "id": call.id, "name": call.name, "is_error": is_error, "status": status, "preview": content[:500]})
+                    activity_final = await activity.mark("failed" if is_error else "completed") if allowed else activity.last_payload
+                    await emit({"type": "tool_result", "id": call.id, "name": call.name, "is_error": is_error, "status": status, "preview": content[:500],
+                                "activity_id": activity.activity_id, "activity": activity_final})
                     self.history.append({
                         "role": "tool", "tool_call_id": call.id, "name": call.name,
                         "content": content, "is_error": is_error,
@@ -332,6 +375,17 @@ class AgentSession:
 
     def _log(self, tool: str, args: dict, reason: str) -> None:
         """Her araç çağrısı denetim kaydına yazılır."""
-        entry = {"ts": time.time(), "tool": tool, "args": args, "decision": reason}
+        # The legacy audit list and agent-error.log must never retain raw tool
+        # arguments. Reuse the same fail-closed renderer as activity events.
+        from .activity_recorder import classify, safe_identifier
+        from .activity_redaction import safe_summary
+        target_type, display = classify(tool, args)
+        entry = {
+            "ts": time.time(),
+            "tool": safe_identifier(tool),
+            "target_type": target_type,
+            "target": display.value,
+            "decision": safe_identifier(reason),
+        }
         self.audit.append(entry)
         logger.info("audit %s", entry)

@@ -17,7 +17,11 @@ def supervise(command, *, popen=subprocess.Popen, wait=None, pause=None):
     def on_stop(_sig, _frame):
         stop.set()
         if child is not None and child.poll() is None:
-            child.terminate()
+            try:
+                child.terminate()
+            except (ProcessLookupError, OSError):
+                # Child may exit between poll() and terminate().
+                pass
     old = {}
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:

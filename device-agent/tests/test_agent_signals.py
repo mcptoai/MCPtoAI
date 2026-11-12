@@ -9,9 +9,9 @@ import time
 def test_sigterm_clean_exit():
     code = """from mcptoai_agent.agent_signals import install_connect_sigterm_handler
 import time
-install_connect_sigterm_handler()
-print('READY', flush=True)
 try:
+    install_connect_sigterm_handler()
+    print('READY', flush=True)
     time.sleep(30)
 except KeyboardInterrupt:
     pass

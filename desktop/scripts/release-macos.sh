@@ -3,8 +3,17 @@ set -euo pipefail
 cd "${0:A:h:h}"
 IDENTITY="${MCPTOAI_DEVELOPER_ID:-}"
 PROFILE="${MCPTOAI_NOTARY_PROFILE:-}"
-if [[ -z "$IDENTITY" || -z "$PROFILE" ]]; then
-  print -u2 'Set MCPTOAI_DEVELOPER_ID and MCPTOAI_NOTARY_PROFILE before distribution.'; exit 2
+# MCPTOAI_SKIP_NOTARIZE=1 yalnızca yerel test paketleri içindir (scripts/build-test-package.sh).
+# Dağıtılan her paket notarize edilmelidir; varsayılan davranış değişmez.
+SKIP_NOTARIZE="${MCPTOAI_SKIP_NOTARIZE:-0}"
+if [[ -z "$IDENTITY" ]]; then
+  print -u2 'Set MCPTOAI_DEVELOPER_ID before distribution.'; exit 2
+fi
+if [[ "$SKIP_NOTARIZE" != 1 && -z "$PROFILE" ]]; then
+  print -u2 'Set MCPTOAI_NOTARY_PROFILE before distribution (MCPTOAI_SKIP_NOTARIZE=1 is for local test builds only).'; exit 2
+fi
+if [[ "$SKIP_NOTARIZE" == 1 ]]; then
+  print -u2 'WARNING: MCPTOAI_SKIP_NOTARIZE=1 - local test build only, NOT for distribution.'
 fi
 security find-identity -v -p codesigning | grep -Fq "\"$IDENTITY\"" || { print -u2 'Developer ID identity unavailable.'; exit 2; }
 DESKTOP_VERSION=$(node -p "require('./package.json').version")
@@ -13,6 +22,7 @@ AGENT_VERSION=$(../device-agent/.venv/bin/python -c "import tomllib; print(tomll
 # Build native permission helper and Python agent.
 npm run build:permission-helper:mac
 npm run build:agent:mac
+../device-agent/.venv/bin/python ../scripts/verify-release-versions.py --agent ../device-agent/dist/mcptoai-agent/mcptoai-agent --build-info build-info.json --release
 # Sign the bundled Python executable before electron-builder signs the outer app.
 AGENT="../device-agent/dist/mcptoai-agent/mcptoai-agent"
 codesign --force --sign "$IDENTITY" --options runtime --timestamp "$AGENT"
@@ -61,21 +71,25 @@ codesign -dv --verbose=2 "$BUNDLED_AGENT" 2>&1 | grep -F "TeamIdentifier=WCUHC7R
 codesign --verify --deep --strict --verbose=2 "$APP"
 node scripts/verify-agent-integrity.js "$BUNDLED_AGENT_APP/Contents/Resources/agent" "$APP/Contents/Resources/agent-version.json"
 # Notarize and staple the final app BEFORE creating the DMG.
-APP_ZIP="dist/MCPtoAI-${DESKTOP_VERSION}-arm64-app-notary.zip"
-ditto -c -k --keepParent "$APP" "$APP_ZIP"
-xcrun notarytool submit "$APP_ZIP" --keychain-profile "$PROFILE" --wait
-xcrun stapler staple "$APP"
-xcrun stapler validate "$APP"
-spctl --assess --type execute --verbose=4 "$APP"
+if [[ "$SKIP_NOTARIZE" != 1 ]]; then
+  APP_ZIP="dist/MCPtoAI-${DESKTOP_VERSION}-arm64-app-notary.zip"
+  ditto -c -k --keepParent "$APP" "$APP_ZIP"
+  xcrun notarytool submit "$APP_ZIP" --keychain-profile "$PROFILE" --wait
+  xcrun stapler staple "$APP"
+  xcrun stapler validate "$APP"
+  spctl --assess --type execute --verbose=4 "$APP"
+fi
 # Build the DMG only after final metadata and final app signature are complete.
 npx electron-builder --mac dmg --prepackaged "$APP" --config.mac.identity="$BUILDER_IDENTITY" --config.mac.hardenedRuntime=true
 # Sign the DMG itself so Gatekeeper can assess the distribution container.
 codesign --force --sign "$IDENTITY" --timestamp "$DMG"
-xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait
-xcrun stapler staple "$DMG"
-xcrun stapler validate "$DMG"
-spctl --assess --type execute --verbose=4 "$APP"
-spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
+if [[ "$SKIP_NOTARIZE" != 1 ]]; then
+  xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait
+  xcrun stapler staple "$DMG"
+  xcrun stapler validate "$DMG"
+  spctl --assess --type execute --verbose=4 "$APP"
+  spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
+fi
 # Produce the updater ZIP only after the DMG has its final stapled ticket.
 # electron-builder generates the matching ZIP blockmap from the final signed app.
 npx electron-builder --mac zip --prepackaged "$APP" --config.mac.identity="$BUILDER_IDENTITY" --config.mac.hardenedRuntime=true
@@ -90,6 +104,11 @@ ditto -x -k "$UPDATE_ZIP" "$ZIP_CHECK_DIR"
 ZIP_APP="$ZIP_CHECK_DIR/MCPtoAI.app"
 [[ -d "$ZIP_APP" ]] || { print -u2 'Updater ZIP contains no MCPtoAI.app'; exit 3; }
 codesign --verify --deep --strict --verbose=2 "$ZIP_APP"
-xcrun stapler validate "$ZIP_APP"
-spctl --assess --type execute --verbose=4 "$ZIP_APP"
+if [[ "$SKIP_NOTARIZE" != 1 ]]; then
+  xcrun stapler validate "$ZIP_APP"
+  spctl --assess --type execute --verbose=4 "$ZIP_APP"
+fi
 shasum -a 256 "$DMG" "$UPDATE_ZIP" "$UPDATE_BLOCKMAP"
+if [[ "$SKIP_NOTARIZE" == 1 ]]; then
+  print -u2 'NOT NOTARIZED - local test build only. Do not upload, publish or add to OTA.'
+fi

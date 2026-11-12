@@ -183,6 +183,21 @@ ipcMain.handle('permissions:status',()=>{if(process.platform!=='darwin')return {
 ipcMain.handle('permissions:request-accessibility',()=>{if(process.platform!=='darwin')return false;const {systemPreferences}=require('electron');return systemPreferences.isTrustedAccessibilityClient(true)});
 ipcMain.handle('permissions:reveal-agent',()=>{if(process.platform!=='darwin')return false;const p=app.isPackaged?path.join(process.resourcesPath,'..','Library','LoginItems','MCPtoAI Device Agent.app'):path.join(os.homedir(),'Applications','MCPtoAI Device Agent.app');if(!fs.existsSync(p))return false;shell.showItemInFolder(p);return true});
 ipcMain.handle('permissions:open',(_,kind)=>{if(process.platform==='win32'){const panes={microphone:'ms-settings:privacy-microphone',camera:'ms-settings:privacy-webcam',files:'ms-settings:privacy-broadfilesystemaccess',screen:'ms-settings:privacy-screenshots'};if(!panes[kind])return false;shell.openExternal(panes[kind]);return true}if(process.platform!=='darwin')return false;const panes={accessibility:'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',fullDisk:'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',files:'x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders',screen:'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',microphone:'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone',camera:'x-apple.systempreferences:com.apple.preference.security?Privacy_Camera'};if(!panes[kind])return false;shell.openExternal(panes[kind]);return true});
+ipcMain.handle('activity:list',async()=>{
+  const a=agentExecutable();
+  return await new Promise(resolve=>{
+    const {execFile}=require('child_process');
+    execFile(a.cmd,[...a.prefix,'activity-list'],{cwd:a.cwd,timeout:10000,maxBuffer:256*1024,windowsHide:true},(error,stdout)=>{
+      if(error)return resolve({ok:false,error:'Local activity unavailable'});
+      try{const data=JSON.parse(stdout);resolve({ok:true,items:Array.isArray(data)?data.slice(0,100):[]})}
+      catch{resolve({ok:false,error:'Invalid activity response'})}
+    });
+  });
+});
+function activityCli(args){const a=agentExecutable(),r=spawnSync(a.cmd,[...a.prefix,...args],{cwd:a.cwd,encoding:'utf8',timeout:15000,windowsHide:true});if(r.status!==0)return {ok:false,error:'Activity operation failed'};try{return {ok:true,...JSON.parse(r.stdout)}}catch{return {ok:false,error:'Invalid activity response'}}}
+ipcMain.handle('activity:status',()=>activityCli(['activity-status']));
+ipcMain.handle('activity:recording',(_,on)=>typeof on==='boolean'?activityCli(['activity-recording',on?'on':'off']):{ok:false});
+ipcMain.handle('activity:clear',()=>activityCli(['activity-clear','--confirm']));
 ipcMain.handle('agent:status',()=>platform.status());
 ipcMain.handle('agent:install',()=>installDeviceAgent());
 ipcMain.handle('permissions:mark-seen',()=>{const c=readSettings();c.permissions_onboarding_seen=true;writeSettings(c);return {ok:true}});
@@ -340,5 +355,5 @@ if(process.platform==='win32'){
     }else{console.error('Windows agent upgrade verification failed',verified);skipHandover=true}
   }
 }
-if(!skipHandover&&fs.existsSync(current)){handoverLog('Desktop startup: handover check current='+current+' version='+app.getVersion());const result=await agentHandover.handoverOnStartup({current,version:app.getVersion(),configRoot,serviceStop:()=>{handoverLog('handoverOnStartup: platform.stop');return platform.stop()},serviceStart:()=>{handoverLog('handoverOnStartup: platform.start');return platform.start()},serviceRestart:()=>{handoverLog('handoverOnStartup: platform.restart launchctl kickstart -k');return platform.restart()},servicePid:()=>platform.servicePid(),probeVersion:process.platform==='darwin'?()=>realMacAgentVersion():undefined,log:handoverLog});handoverLog('handoverOnStartup result='+JSON.stringify(result));if(!result.ok)console.error('Agent handover incomplete',result)}
+if(!skipHandover&&fs.existsSync(current)){handoverLog('Desktop startup: handover check current='+current+' version='+app.getVersion());const build=(()=>{try{return String(JSON.parse(fs.readFileSync(path.join(process.resourcesPath,'build-info.json'),'utf8')).commit||'')}catch{return ''}})();const result=await agentHandover.handoverOnStartup({current,version:app.getVersion(),build,configRoot,serviceStop:()=>{handoverLog('handoverOnStartup: platform.stop');return platform.stop()},serviceStart:()=>{handoverLog('handoverOnStartup: platform.start');return platform.start()},serviceRestart:()=>{handoverLog('handoverOnStartup: platform.restart launchctl kickstart -k');return platform.restart()},servicePid:()=>platform.servicePid(),probeVersion:process.platform==='darwin'?()=>realMacAgentVersion():undefined,log:handoverLog});handoverLog('handoverOnStartup result='+JSON.stringify(result));if(!result.ok)console.error('Agent handover incomplete',result)}
 }catch(e){console.error('Agent handover failed',e.message)}}create()});}app.on('window-all-closed',()=>{if(process.platform!=='darwin')app.quit()});app.on('activate',()=>{if(BrowserWindow.getAllWindows().length===0)create()});

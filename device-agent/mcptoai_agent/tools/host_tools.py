@@ -469,9 +469,18 @@ def build_server(cfg: Settings, *, artifact_session_id: str | None = None) -> Fa
     @safe_tool
     def open_url(url: str) -> str:
         """Open an http(s) URL in the default browser."""
-        if not url.startswith(("http://", "https://")):
-            return "[ERROR] Only http:// or https:// URLs are allowed"
-        return "Opened." if webbrowser.open(url, new=2) else "[ERROR] Could not open the default browser"
+        if not isinstance(url, str) or not url.strip():
+            return "[ERROR] A non-empty http:// or https:// URL is required; no page was opened."
+        try:
+            parsed = urlparse(url)
+            valid = (parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+                     and not parsed.username and not parsed.password
+                     and not any(c.isspace() for c in url) and parsed.port != 0)
+        except ValueError:
+            valid = False
+        if not valid:
+            return "[ERROR] Invalid URL: only absolute http:// or https:// URLs with a valid host are allowed; no page was opened."
+        return "Opened." if webbrowser.open(url, new=2) else "[ERROR] Could not open the default browser; no page was opened."
 
     @mcp.tool(description="Fetch and read a public web page without opening a browser. Use this to research a URL and inspect its actual page content.")
     @safe_tool

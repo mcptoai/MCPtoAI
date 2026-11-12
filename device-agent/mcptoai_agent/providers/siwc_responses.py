@@ -1,7 +1,35 @@
 """SIWC Responses wire-format adapter. No credentials or transport here."""
 from __future__ import annotations
 import json
+import re
 from .base import AssistantTurn, ToolCall, ToolSpec
+
+_SAFE_CODE=re.compile(r'^[A-Za-z0-9_.-]{1,64}$')
+_LIMIT_HINTS=('rate_limit','usage_limit','usage','quota','insufficient')
+
+
+class SiwcResponseError(RuntimeError):
+    """Responses akışındaki failed / incomplete / error olayı.
+
+    code: OpenAI hata kodu ya da incomplete nedeni (yalnızca güvenli karakterler).
+    detail: ham mesajın kısaltılmış hali; yalnızca cihaz loguna gider, ekranda gösterilmez.
+    """
+
+    def __init__(self, kind, code=None, message=None):
+        self.kind=kind
+        code=str(code) if code is not None else ''
+        self.code=code if _SAFE_CODE.match(code) else None
+        self.detail=str(message)[:200] if message else ''
+        self.status_code=429 if self.is_usage_limit else None
+        text=f'SIWC response {kind}'
+        if self.code: text+=f': {self.code}'
+        if self.detail: text+=f' - {self.detail}'
+        super().__init__(text)
+
+    @property
+    def is_usage_limit(self):
+        code=(self.code or '').lower()
+        return any(hint in code for hint in _LIMIT_HINTS)
 
 
 def to_input(messages: list[dict]) -> list[dict]:
@@ -61,8 +89,14 @@ def parse_events(lines) -> AssistantTurn:
                 if not isinstance(args,dict):
                     raise ValueError('Invalid SIWC function arguments')
                 calls.append(ToolCall(id=item['call_id'],name=item['name'],arguments=args))
-        elif kind in ('response.failed','response.incomplete'):
-            raise RuntimeError('SIWC response failed or incomplete')
+        elif kind=='response.failed':
+            error=(event.get('response') or {}).get('error') or {}
+            raise SiwcResponseError('failed',error.get('code'),error.get('message'))
+        elif kind=='response.incomplete':
+            details=(event.get('response') or {}).get('incomplete_details') or {}
+            raise SiwcResponseError('incomplete',details.get('reason'))
+        elif kind=='error':
+            raise SiwcResponseError('failed',event.get('code'),event.get('message'))
         elif kind=='response.completed':
             completed=True
             break
