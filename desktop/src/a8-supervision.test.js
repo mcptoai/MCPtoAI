@@ -4,10 +4,11 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const root=__dirname;
-test('Windows installed autostart uses supervisor, not bare connect',()=>{
+test('Windows installed autostart uses a scheduled background supervisor, never legacy Run',()=>{
  const source=fs.readFileSync(path.join(root,'agent-install-windows.js'),'utf8');
- assert.match(source,/const cmd=`"\$\{exe\}" supervise`/);
- assert.match(source,/spawn\(exe,\['supervise'\]/);
+ assert.match(source,/New-ScheduledTaskAction -Execute \$exe -Argument 'supervise'/);
+ assert.match(source,/Register-ScheduledTask/);
+ assert.doesNotMatch(source,/function autostart\(/);
 });
 test('Windows Stop terminates supervisor process tree',()=>{
  const source=fs.readFileSync(path.join(root,'platform.js'),'utf8');

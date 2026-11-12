@@ -94,3 +94,58 @@ test('real launchctl print output parses service PID rather than app PID',()=>{
  assert.equal(parseLaunchdPid(sample),19269);
  assert.equal(parseLaunchdPid('state = waiting\n'),null);
 });
+
+// 0.2.7 → 0.2.8 OTA (macOS): eski agent'ın kapanması 10 sn'yi aştı, kickstart -k istemcisi zaman aşımına uğradı;
+// launchd yeniden başlatmayı yine de tamamladı. Handover başarısız sayılmamalı.
+test('kickstart timeout with a new launchd PID still completes handover',async()=>{
+  const f=fixture({previous:'0.2.6',entries:[{pid:101,exe:mac}]});
+  f.ops.restartVerifyMs=500;
+  f.ops.serviceRestart=async()=>{f.state.restarts++;f.state.entries=[{pid:501,exe:mac,commandLine:mac+' connect'}];return {ok:false,timedOut:true}};
+  const r=await handoverOnStartup(f.ops);
+  assert.equal(r.ok,true);assert.equal(r.keeper,501);assert.equal(f.state.written,'0.2.7');assert.deepEqual(f.state.killed,[]);
+});
+test('kickstart timeout while only the old agent is alive does not mark success',async()=>{
+  const f=fixture({previous:'0.2.6',entries:[{pid:101,exe:mac}]});
+  f.ops.restartVerifyMs=300;
+  f.ops.serviceRestart=async()=>{f.state.restarts++;return {ok:false,timedOut:true}};
+  f.ops.servicePid=async()=>101;
+  const r=await handoverOnStartup(f.ops);
+  assert.equal(r.ok,false);assert.equal(f.state.written,null);assert.deepEqual(f.state.killed,[]);
+});
+test('kickstart failure without timeout keeps the original error',async()=>{
+  const f=fixture({previous:'0.2.6',entries:[{pid:101,exe:mac}]});
+  f.ops.serviceRestart=async()=>({ok:false,timedOut:false,stderr:'not registered'});
+  const r=await handoverOnStartup(f.ops);
+  assert.equal(r.ok,false);assert.equal(r.error,'Could not restart launchd agent');assert.equal(f.state.written,null);
+});
+
+// Aynı sürüm, farklı build (yeniden derlenmiş ya da onarım kurulumu): eski agent yeniden başlatılmalı.
+test('same version with a different build triggers one handover and records the build',async()=>{
+  const f=fixture({previous:'0.2.7',entries:[{pid:101,exe:mac}]});
+  f.ops.build='newsha';
+  f.ops.serviceRestart=async()=>{f.state.restarts++;f.state.entries=[{pid:501,exe:mac,commandLine:mac+' connect'}];return {ok:true}};
+  f.ops.servicePid=async()=>501;
+  const r=await handoverOnStartup(f.ops);
+  assert.equal(r.ok,true);assert.equal(r.changed,true);assert.equal(f.state.restarts,1);
+});
+test('same version and same build is untouched',async()=>{
+  const f=fixture({previous:'0.2.7',entries:[{pid:101,exe:mac}]});
+  f.ops.build='abc';
+  const marker=require('node:path').join(f.ops.configRoot,'desktop-agent-handover.json');
+  f.ops.readFile=(p)=>p===marker?JSON.stringify({version:'0.2.7',build:'abc'}):'';
+  const r=await handoverOnStartup(f.ops);
+  assert.equal(r.ok,true);assert.equal(r.changed,false);assert.equal(f.state.restarts,0);
+});
+test('without a known build only the version is compared (development runs)',async()=>{
+  const f=fixture({previous:'0.2.7',entries:[{pid:101,exe:mac}]});
+  const r=await handoverOnStartup(f.ops);
+  assert.equal(r.changed,false);assert.equal(f.state.restarts,0);
+});
+
+// DMG ile değiştirme: eski agent zaten kapanmış, launchd hizmeti henüz kayıtlı değil.
+test('restart unavailable with no running agent writes marker without restarting anything',async()=>{
+  const f=fixture({previous:'0.2.6',entries:[]});
+  f.ops.serviceRestart=async()=>({ok:false,timedOut:false,stderr:'not registered'});
+  const r=await handoverOnStartup(f.ops);
+  assert.equal(r.ok,true);assert.equal(r.noRunningAgent,true);assert.equal(f.state.written,'0.2.7');assert.deepEqual(f.state.killed,[]);
+});

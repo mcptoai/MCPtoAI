@@ -4,7 +4,7 @@ from urllib.parse import urlparse,parse_qs
 import httpx
 from mcp import ClientSession,StdioServerParameters
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+from .mcp_streamable_compat import streamablehttp_client, _tool_result_is_error
 from .mcp_config import custom_servers
 from .mcp_oauth import OAUTH_CALLBACK_URL, oauth_metadata_for, oauth_provider_for, prepare_oauth_storage
 
@@ -53,7 +53,7 @@ async def discover(server_id:str):
             # 'Connect' means an account was really authorized, not merely discovered.
             if server.get('managed_integration') == 'google-drive-official':
                 probe=await session.call_tool('list_recent_files',{'pageSize':1,'excludeContentSnippets':True})
-                if getattr(probe,'isError',False):
+                if _tool_result_is_error(probe):
                     raise RuntimeError('Google Drive authorization was not completed')
             return [t.name for t in result.tools]
 
@@ -75,7 +75,7 @@ async def probe_stdio_tool(server_id: str, tool_name: str = "get_me") -> bool:
                 raise RuntimeError(f'MCP tool not available: {tool_name}')
             result=await session.call_tool(tool_name,{})
             text=' '.join(str(getattr(x,'text','')) for x in (getattr(result,'content',None) or [])).strip()
-            if getattr(result,'isError',False):
+            if _tool_result_is_error(result):
                 raise RuntimeError(text or f'{tool_name} failed')
             # Önce yapısal kontrol: get_me bir kullanıcı JSON'u döndürdüyse (login alanı
             # dolu) token kesin olarak geçerlidir. Profil metninde "to authorize" geçse

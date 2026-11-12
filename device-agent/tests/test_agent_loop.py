@@ -240,4 +240,4 @@ def test_capture_screen_emits_image_event_without_base64_in_tool_result(tmp_path
     assert image['data_url'].startswith('data:image/jpeg;base64,')
     assert len(image['data_url']) < 430 * 1024
     assert 'base64' not in result['preview']
-    assert 'sent to the user interface' in result['preview']
+    assert 'delivered to the user interface' in result['preview']

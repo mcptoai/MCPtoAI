@@ -140,6 +140,13 @@ def main() -> None:
     sub.add_parser("cloud-ipc-jsonl")
     sub.add_parser("connect")
     sub.add_parser("supervise")
+    sub.add_parser("activity-list")
+    sub.add_parser("activity-status")
+    setting=sub.add_parser("activity-recording")
+    setting.add_argument("enabled", choices=("on", "off"))
+    clear=sub.add_parser("activity-clear")
+    clear.add_argument("--confirm", action="store_true")
+
     ds=sub.add_parser("discover-mcp"); ds.add_argument("server_id")
     sub.add_parser("list-models")
     sub.add_parser("probe-provider")
@@ -597,16 +604,43 @@ def main() -> None:
             print(f"PHP security [{php.status.upper()}]: {php.detail}")
         if not settings.auth0_domain or not settings.auth0_device_client_id:
             raise SystemExit("MCPtoAI production Auth0 configuration is incomplete.")
+    elif args.cmd == "activity-list":
+        # Metadata-only local history. Never export tool arguments or outputs.
+        from .activity_store import ActivityStore
+        store = ActivityStore()
+        try:
+            rows = store.list_events(limit=100)
+            allowed = ('activity_id','session_id','tool_name','phase','timestamp_utc','target_display','duration_ms','permission_decision','provider','model')
+            print(json.dumps([{k: row[k] for k in allowed if k in row} for row in rows]))
+        finally:
+            store.close()
+    elif args.cmd == "activity-status":
+        from .activity_recorder import recording_enabled
+        print(json.dumps({"enabled": recording_enabled()}))
+    elif args.cmd == "activity-recording":
+        from .config import _user_settings, save_user_settings
+        activity_settings = dict(_user_settings())
+        activity_settings["activity_recording_enabled"] = args.enabled == "on"
+        save_user_settings(activity_settings)
+        print(json.dumps({"enabled": activity_settings["activity_recording_enabled"]}))
+    elif args.cmd == "activity-clear":
+        if not args.confirm:
+            raise SystemExit("Explicit --confirm required")
+        from .activity_store import ActivityStore
+        store = ActivityStore()
+        try: print(json.dumps({"deleted_count": store.clear()}))
+        finally: store.close()
+
     elif args.cmd == "supervise":
         from .agent_supervisor import run
         raise SystemExit(run())
     elif args.cmd == "connect":
         from .agent_signals import install_connect_sigterm_handler
-        install_connect_sigterm_handler()
         from .relay_client import run_relay_client
         from .agent_instance_lock import agent_instance_lock
         from .credential_lock import CredentialLockTimeout
         try:
+            install_connect_sigterm_handler()
             with agent_instance_lock():
                 asyncio.run(run_relay_client(settings))
         except CredentialLockTimeout:
