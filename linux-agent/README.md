@@ -317,19 +317,29 @@ mcptoai --version
 ```
 
 
-## Docker (Linux 0.3.0)
+## Docker (Linux 0.3.1)
 
-The Linux container persists its profile, pairing, credentials and activity in
-`/data`. **Do not use the former `/home/mcptoai/.config` mount for a new install.**
-The container runs as UID 1000. Never start two agents using the same volume.
+The container persists pairing, credentials and activity in `/data`, but Docker
+file tools require a **separate persistent host bind mount** at `/workspace`.
+Without a mounted `/workspace`, default filesystem access is denied and
+`mcptoai doctor` warns. The former in-container Desktop/Documents/Downloads
+were not persistent host folders. The container runs as UID 1000; grant that
+user appropriate permissions on your chosen host folder.
 
-New installation — pair first, then run the agent (after the 0.3.0 image is published):
+New installation (use only after the 0.3.1 image is published):
 
 ```bash
+mkdir -p "$HOME/mcptoai-workspace"
 docker volume create mcptoai-data
-docker run -it --rm -v mcptoai-data:/data ghcr.io/mcptoai/mcptoai:0.3.0 login
+docker run -it --rm -v mcptoai-data:/data \
+  -v "$HOME/mcptoai-workspace:/workspace" \
+  ghcr.io/mcptoai/mcptoai:0.3.1 login
+docker run --rm -v mcptoai-data:/data \
+  -v "$HOME/mcptoai-workspace:/workspace" \
+  ghcr.io/mcptoai/mcptoai:0.3.1 doctor
 docker run -d --name mcptoai --restart unless-stopped \
-  -v mcptoai-data:/data ghcr.io/mcptoai/mcptoai:0.3.0
+  -v mcptoai-data:/data -v "$HOME/mcptoai-workspace:/workspace" \
+  ghcr.io/mcptoai/mcptoai:0.3.1
 ```
 
 ### One-time migration from the old Docker volume

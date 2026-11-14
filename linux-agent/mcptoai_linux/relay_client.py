@@ -468,9 +468,19 @@ class RelayClient:
             from pathlib import Path
             snapshot=config_dir()/'mcp-discovery.json'
             snapshot.parent.mkdir(parents=True,exist_ok=True)
-            tmp=snapshot.with_suffix('.tmp')
-            tmp.write_text(json.dumps({"version":1,"servers":found},indent=2))
-            tmp.replace(snapshot)
+            import os
+            import tempfile
+            # mkstemp creates 0600 regardless of the process umask. Never
+            # reuse a potentially world-readable stale .tmp file.
+            fd, temp_path = tempfile.mkstemp(prefix='.mcp-discovery-', suffix='.tmp', dir=snapshot.parent)
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                    json.dump({"version": 1, "servers": found}, handle, indent=2)
+                os.replace(temp_path, snapshot)
+                os.chmod(snapshot, 0o600)
+            finally:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
         except Exception as exc:
             logger.warning("Could not write MCP discovery snapshot: %s",exc)
         return found
@@ -661,7 +671,19 @@ class RelayClient:
         from .provider_registry import registry
         from .secret_store import get_secret, api_key_name
         pid=str(provider_id or self.cfg.provider).strip()
-        info=registry(self.cfg.user_settings.get("custom_providers") or {}).get(pid)
+        providers=registry(self.cfg.user_settings.get("custom_providers") or {})
+        if provider_id is None and not __import__('os').getenv('MCPTOAI_PROVIDER') and not self.cfg.user_settings.get('provider'):
+            # Only auto-select when the default is unconfigured and exactly one
+            # credential-backed chat provider is configured. No key values logged.
+            from .secret_store import get_secret, api_key_name
+            default=providers.get(pid) or {}
+            if default.get('key', True) and not get_secret(api_key_name(pid)):
+                available=[name for name, meta in providers.items()
+                           if meta.get('chat',True) and meta.get('key',True)
+                           and get_secret(api_key_name(name))]
+                if len(available)==1:
+                    pid=available[0]
+        info=providers.get(pid)
         if not info or info.get("chat") is False:
             raise ValueError("Unsupported chat provider")
         if info.get("key",True) and not get_secret(api_key_name(pid)):
@@ -673,6 +695,13 @@ class RelayClient:
             cfg=self._chat_provider_cfg(provider_id); provider=make_provider(cfg)
             models=await provider.list_models()
             await self._send({"type":"models","provider":cfg.provider,"current_model":cfg.model if cfg.provider==self.cfg.provider else "","models":models})
+        except RuntimeError as exc:
+            if str(exc)=="Provider API key is not configured":
+                logger.info("Model discovery skipped: provider API key is not configured")
+                await self._send({"type":"models","provider":str(provider_id or self.cfg.provider),"current_model":"","models":[],"info":"Configure a provider API key to discover models."})
+            else:
+                logger.exception("Model discovery failed")
+                await self._send({"type":"models","provider":str(provider_id or self.cfg.provider),"current_model":"","models":[],"error":f"{type(exc).__name__}: {exc}"})
         except Exception as exc:
             logger.exception("Model discovery failed")
             await self._send({"type":"models","provider":str(provider_id or self.cfg.provider),"current_model":"","models":[],"error":f"{type(exc).__name__}: {exc}"})

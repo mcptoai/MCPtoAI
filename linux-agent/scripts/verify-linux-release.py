@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--version', default='0.3.0')
+    parser.add_argument('--version', default='0.3.1')
     parser.add_argument('--installed', action='store_true')
     args = parser.parse_args()
     assert re.fullmatch(r'\d+\.\d+\.\d+', args.version), 'Invalid version'

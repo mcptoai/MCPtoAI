@@ -27,11 +27,20 @@ repeat it. If only the old volume is mounted, it continues to use the legacy
 path and logs a warning. A nonempty `/data` is never overwritten; when legacy data is also present
 and no marker exists, startup fails closed rather than silently mixing profiles.
 
+Docker file tools require a separate host bind mount at `/workspace`.
+Create the host folder first with `mkdir -p "$HOME/mcptoai-workspace"`.
+The old container-local Desktop/Documents/Downloads defaults were not persistent
+host folders. Without a mounted `/workspace` (or explicit `MCP_ALLOWED_ROOTS`),
+filesystem access fails closed and `mcptoai doctor` warns. `/data` is for
+persistent agent state, **not** for user file access.
+
 Recommended new run (replace the version with the approved digest/tag):
 
 ```sh
 docker run -d --name mcptoai --restart unless-stopped \
-  -v mcptoai-data:/data ghcr.io/mcptoai/mcptoai:VERSION
+  -v mcptoai-data:/data \
+  -v "$HOME/mcptoai-workspace:/workspace" \
+  ghcr.io/mcptoai/mcptoai:VERSION
 ```
 
 For a one-time legacy migration, additionally mount the **original** legacy

@@ -81,6 +81,11 @@ def _roots() -> list[Path]:
         # A configured workspace must fail closed if it disappears. Falling
         # back to broader legacy roots would silently expand filesystem access.
         return [p] if p.exists() and p.is_dir() else []
+    if os.getenv("MCPTOAI_CONTAINER"):
+        # Docker must not inherit nonexistent, non-persistent home directories.
+        # A missing /workspace remains a denied root; doctor explains the mount.
+        root=Path('/workspace')
+        return [root.resolve()] if root.is_dir() else []
     home=Path.home()
     return [(home/n).resolve() for n in ("Desktop","Documents","Downloads")]
 
