@@ -107,6 +107,8 @@ class AgentSession:
             self.history.extend(restored)
         self.history.append({"role": "user", "content": user_text, "images": images or []})
         system_prompt = SYSTEM_PROMPT
+        from mcptoai_core.workspace_context import workspace_prompt
+        system_prompt += workspace_prompt(self.cfg.allowed_roots)
         if self.cfg.enable_shell:
             # Görevler modelden bağımsızdır; durumları her turda talimata eklenir ki
             # model değiştiğinde yeni model de çalışan/biten görevleri bilsin.

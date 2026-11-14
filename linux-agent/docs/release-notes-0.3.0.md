@@ -21,3 +21,12 @@ container: `ghcr.io/mcptoai/mcptoai:0.3.0` (only after explicit approval).
 
 This is a release candidate document; no tag, PyPI upload or GHCR push is
 performed by CI dry runs. See `linux-agent/README.md` for full commands.
+
+## GHCR latest baseline (read-only)
+
+Recorded from the independent Ubuntu verification run on 2026-11-14 (GitHub Actions run `43532724754`):
+
+- `ghcr.io/mcptoai/mcptoai:latest` manifest-list digest: `sha256:acaa4f7516ab1eca6373aee62d4495b53f4527b722b4182c921f585142cc5d06`
+- `ghcr.io/mcptoai/mcptoai:0.3.0` manifest-list digest: `sha256:f6ee7d63558e882ab19fca2d6c3d2e1e425ebf05a700eba75eb0a845e94e460f`
+
+This is a post-publication snapshot, **not proof of the pre-release latest digest**. Future release checks must compare the read-only `latest` digest against this recorded baseline before and after publishing.

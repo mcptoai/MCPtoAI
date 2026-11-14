@@ -212,18 +212,24 @@ def cmd_update(a) -> None:
 
 def cmd_login(_a) -> None:
     from .auth import device_login
-    sub = asyncio.run(device_login(_cfg()))
-    print(f"Device paired: {sub}")
+    asyncio.run(device_login(_cfg()))
+    import socket
+    print(f"Device paired: {socket.gethostname()}")
     print()
     print("Connect now:")
     print("  mcptoai connect")
     print()
-    print("Keep this machine connected in the background:")
-    print("  mcptoai service install")
+    if os.getenv("MCPTOAI_CONTAINER"):
+        print("Docker: use a container restart policy to keep the connection running.")
+        print("Run: mcptoai connect (or restart the container with connect as its command)")
+    else:
+        print("Keep this machine connected in the background:")
+        print("  mcptoai service install")
     print()
     print("Recommended next steps:")
     print("  mcptoai keys set <provider>")
-    print("  mcptoai service install")
+    if not os.getenv("MCPTOAI_CONTAINER"):
+        print("  mcptoai service install")
     print("  mcptoai doctor")
 
 
@@ -283,6 +289,11 @@ def cmd_doctor(_a) -> None:
     check(f"API key ({cfg.provider})", has_key or not info.get("key", True), "set" if has_key else f"run: mcptoai keys set {cfg.provider}")
     if os.getenv("MCPTOAI_CONTAINER"):
         print("  Running in a container: the background connection is managed by Docker.")
+        workspace = __import__('pathlib').Path('/workspace')
+        if not cfg.allowed_roots or (not workspace.is_dir() and not os.getenv("MCP_ALLOWED_ROOTS") and not cfg.user_settings.get("workspace_root")):
+            check("Docker workspace", False, "Mount a persistent folder: -v ~/folder:/workspace (or set MCP_ALLOWED_ROOTS)")
+        else:
+            check("Docker workspace", True, ", ".join(str(p) for p in cfg.allowed_roots))
     else:
         check("Background service", service.is_active(), service.status_line())
         check("Start at boot (linger)", service.linger_enabled(), "on" if service.linger_enabled() else "sudo loginctl enable-linger $USER")
@@ -308,10 +319,13 @@ def cmd_workspace(a) -> None:
         if chosen:
             print(f"Workspace: {chosen}")
         else:
-            home = Path.home()
             print("Workspace: default")
-            for name in ("Desktop", "Documents", "Downloads"):
-                print(f"  {home / name}")
+            if os.getenv("MCPTOAI_CONTAINER"):
+                print("  /workspace (mount with -v ~/folder:/workspace)")
+            else:
+                home = Path.home()
+                for name in ("Desktop", "Documents", "Downloads"):
+                    print(f"  {home / name}")
         return
     if a.action == "reset":
         current.pop("workspace_root", None)
