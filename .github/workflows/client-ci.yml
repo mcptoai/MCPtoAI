@@ -46,6 +46,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e . pytest
+          python -m pip install -e ../shared-core
       - name: Test
         working-directory: linux-agent
         env:
@@ -53,6 +54,8 @@ jobs:
         run: |
           mkdir -p "$XDG_CONFIG_HOME"
           python -m pytest -q
+      - name: Shared core tests
+        run: python -m pytest -q shared-core/tests
 
   desktop-source:
     runs-on: ubuntu-latest
