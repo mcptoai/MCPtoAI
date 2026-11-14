@@ -52,4 +52,6 @@ Replace `mcptoai` with the **actual** legacy volume name; inspect `docker inspec
 - Image signature verified with Cosign using the exact GitHub Actions release workflow certificate identity. BuildKit SBOM and provenance are available within the signed OCI index; provenance source revision matches the release commit. Separately Cosign-signed SBOM/SLSA attestations are **not** claimed for this release.
 - `latest` was not updated by this release. Recorded post-release `latest` baseline: `sha256:acaa4f7516ab1eca6373aee62d4495b53f4527b722b4182c921f585142cc5d06`.
 
+**Source archive notice:** The public repository currently contains an older Linux source snapshot (0.2.6). GitHub-generated source archives for this public release tag must not be treated as the Linux 0.3.0 package source. The actual released PyPI wheel and GHCR image are built from the separately verified private core commit `d06023d2c6bd9e91b722a13980857dad234aaea7`.
+
 Linux versioning is independent of Desktop v0.2.x. Docker 0.3.0 supports linux/amd64 and linux/arm64.
