@@ -37,6 +37,10 @@ class AgentSession:
         self.provider = provider
         self.server = server
         self.policy = policy or ToolPolicy()
+        self.activity_session_id = None
+        self.activity_provider = None
+        self.activity_store = None
+        self._activity = None
         self.history: list[dict] = []
         self.audit: list[dict] = []
         self.remote_tools = remote_tools or []
@@ -45,8 +49,15 @@ class AgentSession:
 
     async def _tool_specs(self, client: Client) -> list[ToolSpec]:
         tools = await client.list_tools()
-        local = [ToolSpec(t.name, t.description or "", t.inputSchema) for t in tools if self.policy.decide(t.name).value != "deny"]
+        local = [ToolSpec(t.name, t.description or "", t.input_schema) for t in tools if self.policy.decide(t.name).value != "deny"]
         return local + [t for t in self.remote_tools if self.policy.decide(t.name).value != "deny"]
+
+    def _activity_recorder(self):
+        if self._activity is None:
+            from .activity_recorder import ActivityRecorder
+            self._activity = ActivityRecorder(self.activity_session_id, self.activity_store,
+                provider=self.activity_provider, model=getattr(self.provider,"model",None))
+        return self._activity
 
     async def run_capability(self, capability: str, user_text: str, approver: Approver, emit: Emit) -> str:
         routes={"replicate":{"tool":"generate_image","args":lambda text:{"prompt":text,"aspect_ratio":"1:1"}}}
@@ -70,6 +81,7 @@ class AgentSession:
         await emit({"type":"done","capability":capability}); return content
 
     async def run(self, user_text: str, approver: Approver, emit: Emit, images: list[dict] | None = None, language: str | None = None, context: list[dict] | None = None, preferred_mcp_server_ids: list[str] | None = None) -> str:
+        self._activity_recorder().new_turn()
         if context and not self.history:
             restored = []
             for item in context[-40:]:
@@ -185,11 +197,15 @@ class AgentSession:
                     refusal_path, approval_meta = validate_local_path(call.name, request_args, self.cfg)
                     if approval_meta and call.name in {"send_artifact", "write_file"}:
                         request_args["_approval_meta"] = approval_meta
-                    await emit({"type": "tool_request", "id": call.id, "name": call.name, "arguments": request_args})
+                    activity = self._activity_recorder().begin(call.name, request_args)
+                    await activity.mark("requested")
+                    await emit({"type": "tool_request", "id": call.id, "name": call.name, "arguments": request_args,
+                                "activity_id": activity.activity_id, "activity": activity.last_payload})
                     if refusal_path is not None:
+                        await activity.mark("denied", decision="denied")
                         self._log(call.name, call.arguments, "preflight_refused")
                         self.history.append({"role":"tool","tool_call_id":call.id,"name":call.name,"content":refusal_path,"is_error":True})
-                        await emit({"type":"tool_result","id":call.id,"name":call.name,"status":"blocked","is_error":True,"preview":refusal_path})
+                        await emit({"type":"tool_result","id":call.id,"name":call.name,"status":"blocked","is_error":True,"preview":refusal_path,"activity_id":activity.activity_id,"activity":activity.last_payload})
                         if refusal_path.startswith("Protected location:"):
                             category = refusal_path.split(": ", 1)[1]
                             if category not in protected_notified:
@@ -199,16 +215,29 @@ class AgentSession:
                                            f"MCPtoAI blocked access to a protected location ({category}). Nothing was read, written or sent.")
                                 await emit({"type":"text","text":message})
                         continue
-                    allowed, reason = await self.policy.authorize(call.name, request_args, approver)
+                    async def tracked_approver(tool, args):
+                        await activity.mark("approval_pending", decision="pending")
+                        return await approver(tool,args)
+                    try:
+                        allowed, reason = await self.policy.authorize(call.name, request_args, tracked_approver)
+                    except asyncio.CancelledError:
+                        await activity.mark("cancelled")
+                        raise
                     self._log(call.name, call.arguments, reason)
                     if not allowed:
+                        await activity.mark("denied", decision="denied")
                         content = f"Tool call was not permitted ({reason})."
                         self.history.append({"role":"tool","tool_call_id":call.id,"name":call.name,"content":content,"is_error":True})
-                        await emit({"type":"tool_result","id":call.id,"name":call.name,"status":"denied" if reason=="user_denied" else "blocked","is_error":True,"preview":content})
+                        await emit({"type":"tool_result","id":call.id,"name":call.name,"status":"denied" if reason=="user_denied" else "blocked","is_error":True,"preview":content,"activity_id":activity.activity_id,"activity":activity.last_payload})
                         await emit({"type":"text","text":"The requested tool was not approved, so this request was stopped. No further tools were executed."})
                         await emit({"type":"done"})
                         return ""
                     else:
+                        if reason == "user_approved":
+                            await activity.mark("approved", decision="approved")
+                        else:
+                            activity.decision="not_required"
+                        await activity.mark("started")
                         if self.remote_caller and call.name.startswith("mcp__"):
                             content, is_error = await self.remote_caller(call.name, call.arguments)
                         else:
@@ -251,7 +280,10 @@ class AgentSession:
                                 await emit({"type": "artifact", "artifact": item})
                         except (ValueError, TypeError, AttributeError):
                             pass
-                    await emit({"type": "tool_result", "id": call.id, "name": call.name, "is_error": is_error, "status": status, "preview": content[:500]})
+                    await activity.mark("failed" if is_error else "completed")
+                    await emit({"type": "tool_result", "id": call.id, "name": call.name, "is_error": is_error,
+                                "status": status, "preview": content[:500], "activity_id": activity.activity_id,
+                                "activity": activity.last_payload})
                     self.history.append({
                         "role": "tool", "tool_call_id": call.id, "name": call.name,
                         "content": content, "is_error": is_error,

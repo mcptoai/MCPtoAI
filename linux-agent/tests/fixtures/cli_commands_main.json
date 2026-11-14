@@ -1,0 +1,48 @@
+{
+  "commands": [
+    "activity-clear",
+    "activity-list",
+    "activity-recording",
+    "chat",
+    "connect",
+    "doctor",
+    "history",
+    "jobs",
+    "keys",
+    "login",
+    "logout",
+    "mcp",
+    "models",
+    "reset",
+    "service",
+    "shell",
+    "status",
+    "update",
+    "use",
+    "workspace"
+  ],
+  "nested": {
+    "workspace": [
+      "show",
+      "set",
+      "reset"
+    ],
+    "keys": [
+      "list",
+      "set",
+      "remove"
+    ],
+    "mcp": [
+      "list",
+      "add-http",
+      "add-stdio",
+      "remove"
+    ],
+    "jobs": [
+      "list",
+      "show",
+      "logs",
+      "stop"
+    ]
+  }
+}

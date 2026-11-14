@@ -64,8 +64,8 @@ def _start_turn(server, command, timeout=60):
 
 def test_tum_araclar_olay_dongusunu_tikamaz():
     async def check():
-        tools = await _server().get_tools()
-        sync = [name for name, tool in tools.items() if not inspect.iscoroutinefunction(tool.fn)]
+        tools = await _server().list_tools()
+        sync = [tool.name for tool in tools if not inspect.iscoroutinefunction(tool.fn)]
         assert sync == [], f"olay döngüsünde çalışan senkron araçlar: {sync}"
     asyncio.run(check())
 

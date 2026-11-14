@@ -46,6 +46,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e . pytest
+          python -m pip install -e ../shared-core
       - name: Test
         working-directory: linux-agent
         env:
@@ -53,6 +54,15 @@ jobs:
         run: |
           mkdir -p "$XDG_CONFIG_HOME"
           python -m pytest -q
+      - name: Shared core unit tests (public Linux subset)
+        # Cross-agent integration/packaging parity suites require the newer
+        # private Desktop agent, which is not part of this Linux-only export.
+        run: |
+          python -m pytest -q shared-core/tests \
+            --ignore=shared-core/tests/test_agent_network_integration.py \
+            --ignore=shared-core/tests/test_legacy_imports.py \
+            --ignore=shared-core/tests/test_packaging_contract.py \
+            --ignore=shared-core/tests/test_parity.py
 
   desktop-source:
     runs-on: ubuntu-latest

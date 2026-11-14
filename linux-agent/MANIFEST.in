@@ -11,3 +11,5 @@ global-exclude *.orig
 global-exclude *.tmp
 global-exclude .env
 global-exclude .env.*
+
+recursive-include _bundled_core *.py
