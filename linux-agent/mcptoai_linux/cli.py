@@ -19,6 +19,39 @@ from dataclasses import replace
 from . import __version__
 
 
+def cmd_activity_list(args):
+    from .activity_store import ActivityStore
+    store=ActivityStore()
+    try:
+        print(json.dumps(store.list_events(limit=args.limit), ensure_ascii=False, indent=2))
+    finally:
+        store.close()
+
+
+def cmd_activity_clear(args):
+    if not args.confirm:
+        print("Refusing to clear local activity history without --confirm", file=sys.stderr)
+        raise SystemExit(2)
+    from .activity_store import ActivityStore
+    store=ActivityStore()
+    try:
+        count=store.clear()
+    finally:
+        store.close()
+    print(f"Deleted {count} local activity events")
+
+
+def cmd_activity_recording(args):
+    from .config import _user_settings, save_user_settings
+    from .activity_recorder import recording_enabled
+    if args.action in ("on", "off"):
+        settings=_user_settings()
+        settings["activity_recording_enabled"]=(args.action=="on")
+        save_user_settings(settings)
+        _restart_service_if_running()
+    print("on" if recording_enabled() else "off")
+
+
 def _configure_console_encoding():
     for stream in (sys.stdout, sys.stderr):
         if stream is not None and hasattr(stream, "reconfigure"):
@@ -748,8 +781,27 @@ Common tasks:
   mcptoai mcp list               List connected MCP servers
   mcptoai shell status           Show terminal-command permission
   mcptoai jobs list              Show long-running jobs
+  mcptoai stop                   Stop the Linux background service
+  mcptoai activity-list          Show recorded local tool activity
+  mcptoai activity-recording status  Check recording switch
+  mcptoai activity-clear --confirm  Delete local activity history
+  mcptoai history status         Check local/cloud chat history setting
   mcptoai chat                   Chat directly over SSH/terminal
   mcptoai connect                Connect in the foreground
+
+Docker (use the same commands via `docker exec mcptoai mcptoai <command>`):
+  docker run --rm ghcr.io/mcptoai/mcptoai:VERSION --help
+  docker run -d --name mcptoai --restart unless-stopped -v mcptoai-data:/data ghcr.io/mcptoai/mcptoai:VERSION
+  docker logs mcptoai            Inspect startup/migration warnings
+  docker exec mcptoai mcptoai status
+
+Docker upgrade/rollback: stop and remove the old container, then run the
+approved new/previous image against the SAME /data volume. Back up first.
+Legacy installations used /home/mcptoai/.config; mount BOTH the old volume
+there and an empty new /data volume on first upgrade to COPY (not move)
+settings and pairing data. A migration marker prevents repeated copying.
+If only the old volume is mounted, legacy mode continues with a warning.
+Never run two agents against one writable volume at the same time.
 
 Run `mcptoai <command> --help` for command-specific examples and safety notes.
 Documentation: https://mcptoai.com/""",
@@ -888,6 +940,19 @@ Security:
     hst.add_argument("action", choices=["local", "cloud", "status"], nargs="?", default="status", help="History storage mode (default: status)")
     hst.set_defaults(fn=cmd_history)
 
+    activity_list=leaf("activity-list", "List local activity metadata", "Read bounded local activity history.",
+                       "Example:\n  mcptoai activity-list --limit 25\n\nHistory stays on this device; sensitive values are redacted.")
+    activity_list.add_argument("--limit", type=int, choices=range(1,101), metavar="1..100", default=100)
+    activity_list.set_defaults(fn=cmd_activity_list)
+    activity_clear=leaf("activity-clear", "Delete local activity history", "Destructive local-only action; never exposed through relay.",
+                        "Example:\n  mcptoai activity-clear --confirm\n\nIrreversible: deletes locally recorded tool activity, not account data.")
+    activity_clear.add_argument("--confirm", action="store_true", required=False)
+    activity_clear.set_defaults(fn=cmd_activity_clear)
+    activity_recording=leaf("activity-recording", "Enable or disable activity recording", "Control local activity recording.",
+                            "Examples:\n  mcptoai activity-recording status\n  mcptoai activity-recording on\n  mcptoai activity-recording off\n\nRecording stores redacted tool activity locally.")
+    activity_recording.add_argument("action", choices=["on", "off", "status"])
+    activity_recording.set_defaults(fn=cmd_activity_recording)
+
     j = leaf("jobs", "Long-running background jobs",
              "Inspect and stop long-running jobs started through MCPtoAI.",
              """Examples:
@@ -971,6 +1036,11 @@ Warning:
   It does not delete your MCPtoAI account or cloud-side account data.""")
     rs.add_argument("-y", "--yes", action="store_true", help="Skip the destructive-action confirmation prompt")
     rs.set_defaults(fn=cmd_reset)
+
+    leaf("stop", "Stop the running Linux agent service",
+         "Stop the current user-level MCPtoAI systemd service without deleting pairing or settings.",
+         "Example:\n  mcptoai stop\n\nEquivalent to `mcptoai service stop`. In Docker, stop the container with `docker stop mcptoai`.").set_defaults(
+             fn=lambda _args: cmd_service(argparse.Namespace(action="stop")))
 
     leaf("connect", "Connect this machine to MCPtoAI in the foreground",
          "Connect this machine to the MCPtoAI relay in the foreground. Normally `mcptoai service install` keeps this connection running for you.",

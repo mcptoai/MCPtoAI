@@ -47,19 +47,7 @@ def classical_context(context: ssl.SSLContext) -> ssl.SSLContext:
     return context
 
 
-def is_connection_reset(exc: BaseException) -> bool:
-    """Bağlantı el sıkışması sırasında karşı tarafça/ağ cihazınca kesildi mi? (neden zincirine bakar)"""
-    seen: set[int] = set()
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if isinstance(current, (ConnectionResetError, ssl.SSLEOFError)):
-            return True
-        if isinstance(current, OSError) and current.errno in _RESET_ERRNOS:
-            return True
-        current = current.__cause__ or current.__context__
-    return False
-
+from mcptoai_core.network import is_connection_reset
 
 def _transport_class(h):
     """h: SDK'nın kullandığı httpx modülü ('httpx' ya da 'httpx2'); taşıma sınıfı ona göre türetilir."""

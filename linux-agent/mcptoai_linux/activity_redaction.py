@@ -1,0 +1,4 @@
+"""Alias canonical shared-core activity module (including private test hooks)."""
+import sys
+from mcptoai_core import activity_redaction as _module
+sys.modules[__name__] = _module

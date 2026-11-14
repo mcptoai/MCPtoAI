@@ -163,15 +163,30 @@ def build_server(cfg: Settings, *, artifact_session_id: str | None = None) -> Fa
 
         # Çıktı, subprocess(text=True) ile aynı kodlamayla çözülür (Windows'ta yerel kod sayfası).
         encoding = locale.getpreferredencoding(False)
-        try:
-            await asyncio.wait_for(asyncio.gather(drain(), proc.wait()), timeout)
-        except asyncio.TimeoutError:
+        drain_task = asyncio.create_task(drain())
+        wait_task = asyncio.create_task(proc.wait())
+
+        async def finish_cancelled_process():
+            # Cancellation must not abandon the stdout pipe; otherwise its transport
+            # may leave BaseSubprocessTransport.__del__ running after
+            # the event loop has closed. Reap the shell and drain its pipe.
             await _kill_tree(proc)
+            try:
+                await asyncio.wait_for(asyncio.shield(drain_task), 2)
+            except asyncio.TimeoutError:
+                drain_task.cancel()
+                await asyncio.gather(drain_task, return_exceptions=True)
+            await asyncio.gather(wait_task, return_exceptions=True)
+
+        try:
+            await asyncio.wait_for(asyncio.shield(asyncio.gather(drain_task, wait_task)), timeout)
+        except asyncio.TimeoutError:
+            await finish_cancelled_process()
             out = buf.decode(encoding, errors="replace").strip()
             return _truncate(f"[ERROR] {timeout} sn sonra zaman aşımı; komut ve alt süreçleri durduruldu\n{out}".strip())
         except asyncio.CancelledError:
             # Durdur: iptal devam ederken bile süreç ağacının öldürülmesi tamamlanmalı.
-            await asyncio.shield(_kill_tree(proc))
+            await asyncio.shield(finish_cancelled_process())
             raise
         output = buf.decode(encoding, errors="replace").strip() or "(çıktı yok)"
         prefix = f"[exit={proc.returncode}]\n" if proc.returncode else ""

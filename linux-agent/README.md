@@ -317,44 +317,49 @@ mcptoai --version
 ```
 
 
-## Docker
+## Docker (Linux 0.3.0)
 
-Pair using a persistent configuration volume:
+The Linux container persists its profile, pairing, credentials and activity in
+`/data`. **Do not use the former `/home/mcptoai/.config` mount for a new install.**
+The container runs as UID 1000. Never start two agents using the same volume.
+
+New installation — pair first, then run the agent (after the 0.3.0 image is published):
 
 ```bash
-docker run -it --rm \
-  -v mcptoai:/home/mcptoai/.config \
-  ghcr.io/mcptoai/mcptoai login
+docker volume create mcptoai-data
+docker run -it --rm -v mcptoai-data:/data ghcr.io/mcptoai/mcptoai:0.3.0 login
+docker run -d --name mcptoai --restart unless-stopped \
+  -v mcptoai-data:/data ghcr.io/mcptoai/mcptoai:0.3.0
 ```
 
-Then run continuously:
+### One-time migration from the old Docker volume
+
+Stop the old container first and back up its named volume. Replace
+`mcptoai` below with your **actual existing legacy volume name**. The new
+volume `mcptoai-data` must be **empty** on first migration. The entrypoint
+copies the old profile into `/data`, leaves the legacy volume untouched, and
+writes `/data/.legacy-volume-copied`. Do not delete the old volume until the
+new agent and pairing are verified.
 
 ```bash
-docker run -d \
-  --name mcptoai \
-  --restart unless-stopped \
-  -v mcptoai:/home/mcptoai/.config \
-  ghcr.io/mcptoai/mcptoai
-```
-
-Inside Docker, the container restart policy replaces the systemd user service.
-
-### Updating Docker
-
-Docker containers are immutable, so `mcptoai update` does not modify a running container. Pull the new image and recreate the container while keeping the same persistent config volume:
-
-```bash
-docker pull ghcr.io/mcptoai/mcptoai:latest
 docker stop mcptoai
 docker rm mcptoai
-docker run -d \
-  --name mcptoai \
-  --restart unless-stopped \
+docker volume create mcptoai-data
+docker run --rm \
   -v mcptoai:/home/mcptoai/.config \
-  ghcr.io/mcptoai/mcptoai:latest
+  -v mcptoai-data:/data \
+  ghcr.io/mcptoai/mcptoai:0.3.0 --help
+docker run -d --name mcptoai --restart unless-stopped \
+  -v mcptoai-data:/data ghcr.io/mcptoai/mcptoai:0.3.0
 ```
 
-The `mcptoai` named volume keeps pairing, provider credentials and local configuration across container replacement. Release images are also tagged with their CLI version, for example `ghcr.io/mcptoai/mcptoai:0.1.16`.
+Check logs and pairing before removing the old volume. For rollback, stop
+and remove the new container, then recreate the old image using the
+**untouched old volume** at `/home/mcptoai/.config`. Back up the volume before
+any update; never attach two running agents to one volume. If `/data` already
+contains files while a legacy profile is mounted without a migration marker,
+startup refuses to mix the two states. Docker updates require pulling a new
+image and recreating the container, not `mcptoai update` inside the container.
 
 ## Troubleshooting
 
