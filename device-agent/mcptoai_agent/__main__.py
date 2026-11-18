@@ -93,18 +93,38 @@ def _bool_env(name: str) -> bool:
     from .config import _bool
     return _bool(name)
 
+def _attach_file_log_if_needed(logfile, *, root=None, stderr=None):
+    """Do not write twice if launchd already redirects stderr to this file."""
+    import os
+    from pathlib import Path
+    from logging.handlers import RotatingFileHandler
+    root = root or logging.getLogger()
+    stderr = sys.stderr if stderr is None else stderr
+    logfile = Path(logfile)
+    for handler in root.handlers:
+        if isinstance(handler, logging.FileHandler) and Path(handler.baseFilename) == logfile.resolve():
+            return False
+    try:
+        stream_stat, file_stat = os.fstat(stderr.fileno()), logfile.stat()
+        if (stream_stat.st_dev, stream_stat.st_ino) == (file_stat.st_dev, file_stat.st_ino):
+            return False
+    except (OSError, ValueError, AttributeError):
+        pass
+    handler = RotatingFileHandler(logfile, maxBytes=2*1024*1024, backupCount=3, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    root.addHandler(handler)
+    return True
+
+
 def main() -> None:
     _configure_console_encoding()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     if "connect" in sys.argv[1:] or "chatgpt-auth" in sys.argv[1:]:
-        from logging.handlers import RotatingFileHandler
         import os
         from pathlib import Path
         logdir = (Path(os.environ.get("LOCALAPPDATA", Path.home()/"AppData"/"Local"))/"MCPtoAI"/"Logs") if os.name == "nt" else (Path.home()/"Library"/"Logs"/"MCPtoAI")
         logdir.mkdir(parents=True, exist_ok=True)
-        handler = RotatingFileHandler(logdir/"agent-error.log", maxBytes=2*1024*1024, backupCount=3, encoding="utf-8")
-        handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-        logging.getLogger().addHandler(handler)
+        _attach_file_log_if_needed(logdir / "agent-error.log")
     p = argparse.ArgumentParser(prog="mcptoai-agent")
     p.add_argument("--version", action="store_true", help="show version and build commit")
     sub = p.add_subparsers(dest="cmd")
@@ -138,6 +158,9 @@ def main() -> None:
     cc=sub.add_parser("cloud-chats"); cc.add_argument("action",choices=["list","get"]); cc.add_argument("session_id",nargs="?")
     sub.add_parser("cloud-ipc-json")
     sub.add_parser("cloud-ipc-jsonl")
+    uploads=sub.add_parser('uploads', help='Manage device-local pending file uploads (Docker exec compatible)')
+    uploads.add_argument('action',choices=('list','accept','deny'))
+    uploads.add_argument('transfer_id',nargs='?')
     sub.add_parser("connect")
     sub.add_parser("supervise")
     sub.add_parser("activity-list")
@@ -178,6 +201,19 @@ def main() -> None:
         print(f"mcptoai-agent {v} commit={info.get('commit','unknown')} date={info.get('date','unknown')} platform={info.get('platform','unknown')} dirty={str(info.get('dirty','unknown')).lower()}")
         return
     if not args.cmd: p.error("a command is required")
+
+    if args.cmd == 'uploads':
+        from . import upload_decisions
+        if args.action == 'list':
+            print(json.dumps(upload_decisions.list_pending(),indent=2))
+        else:
+            import re
+            if not args.transfer_id or not re.fullmatch(r'[a-f0-9-]{36}',args.transfer_id):
+                p.error('accept/deny requires a valid transfer ID')
+            if not upload_decisions.decide(args.transfer_id,'accepted' if args.action=='accept' else 'denied'):
+                p.error('Transfer missing, expired, or already decided')
+            print('accepted' if args.action=='accept' else 'denied')
+        return
 
     if args.cmd == "skills":
         from . import skills as skill_store
@@ -389,6 +425,7 @@ def main() -> None:
             pending_approvals={}
             async def one(d):
                 sid=str(d.get('session_id') or 'local')[:128]; text=str(d.get('text') or '').strip()
+                if not text and d.get('attachments') is not None: text='Please review the attached files.'
                 if not text or len(text.encode('utf-8'))>256*1024: return
                 from dataclasses import replace
                 from .provider_registry import registry
@@ -412,13 +449,30 @@ def main() -> None:
                     provider=make_provider(provider_cfg, siwc_origin="desktop-local", siwc_user_initiated=True); provider.model=requested_model
                     remote_rules={name: __import__("mcptoai_agent.policy",fromlist=["Decision"]).Decision((remote_runtime._remote_tool_map[name][0].get("tools") or {}).get(remote_runtime._remote_tool_map[name][1],"confirm")) for name in remote_runtime._remote_tool_specs}
                     session=sessions[session_key]=AgentSession(provider_cfg,provider,build_server(provider_cfg),policy=ToolPolicy(rules={**load_rules(),**remote_rules}),remote_tools=list(remote_runtime._remote_tool_specs.values()),remote_caller=remote_runtime._call_remote_tool,server_aliases=remote_runtime._server_aliases())
+                # Opt-in gate: identity is read from the paired local vault, not chat/model input.
+                # A missing or removed pairing fails closed; the resolver is called again at dispatch.
+                import os
+                session.action_approval_gate_enabled = os.getenv('MCPTOAI_ACTION_APPROVAL_GATE') == '1'
+                session.action_turn_id = __import__('secrets').token_urlsafe(24)
+                def trusted_identity():
+                    from .auth import _auth_bundle, device_removed_state
+                    bundle = _auth_bundle()
+                    user = bundle.get('owner_sub')
+                    device = bundle.get('device_id')
+                    removed = device_removed_state()
+                    if (not isinstance(user, str) or not user.strip()
+                            or not isinstance(device, str) or not device.strip()
+                            or removed.get('device_id') == device):
+                        return None
+                    return (user, device)
+                session.action_identity_resolver = trusted_identity
                 async def emit(event):
                     _write_json_stdout({'kind':'event','session_id':sid,'event':event})
                 async def approver(tool,tool_args):
                     aid=__import__('uuid').uuid4().hex
                     fut=asyncio.get_running_loop().create_future()
                     pending_approvals[aid]=(sid,fut)
-                    _write_json_stdout({'kind':'approval_required','session_id':sid,'approval_id':aid,'tool':tool,'arguments':tool_args})
+                    _write_json_stdout({'kind':'approval_required','session_id':sid,'approval_id':aid,'tool':tool,'arguments':tool_args,'native_action':tool_args.get('_mcptoai_native_action') is True})
                     try:
                         return await asyncio.wait_for(fut,timeout=settings.approval_timeout_seconds)
                     except asyncio.TimeoutError:
@@ -435,8 +489,9 @@ def main() -> None:
                     context=[x for x in context[-40:] if isinstance(x,dict) and x.get('role') in {'user','assistant'} and isinstance(x.get('content'),str)]
                     if sum(len(x['content'].encode('utf-8')) for x in context)>256*1024: raise ValueError('Chat context is too large')
                     capability=str(d.get('capability') or '').strip().casefold()
+                    if capability and d.get("attachments") is not None: raise ValueError("Attachments are supported only in chat turns.")
                     if capability: await session.run_capability(capability,text,approver,emit)
-                    else: await session.run(text,approver,emit,images=images,language=d.get('language'),context=context,preferred_mcp_server_ids=preferred)
+                    else: await session.run(text,approver,emit,images=images,language=d.get('language'),context=context,preferred_mcp_server_ids=preferred,attachments=d.get("attachments"))
                 except Exception as exc:
                     _write_json_stdout({'kind':'event','session_id':sid,'event':{'type':'error','message':f'{type(exc).__name__}: {exc}'}})
                 _write_json_stdout({'kind':'turn_done','session_id':sid})

@@ -2,7 +2,7 @@ const fs=require('fs');
 const path=require('path');
 const os=require('os');
 const crypto=require('crypto');
-const {spawnSync}=require('child_process');
+const {spawnSync}=require('./hidden-child-process');
 
 const OWNER='github';
 const REPO='github-mcp-server';

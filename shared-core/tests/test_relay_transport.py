@@ -78,6 +78,6 @@ def test_connection_options_and_context_ownership():
     asyncio.run(run())
     assert calls == [
         ("wss://relay/", {"additional_headers": {"Authorization": "test"},
-                          "ping_interval": 20, "ping_timeout": 20, "max_size": 2**20}),
+                          "ping_interval": 20, "ping_timeout": 20, "max_size": 29 * 1024 * 1024}),
         "enter", "body", "exit"
     ]

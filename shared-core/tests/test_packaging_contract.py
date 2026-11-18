@@ -41,5 +41,7 @@ def test_linux_docker_smoke_job_is_path_gated():
     assert 'linux-docker-smoke:' in ci
     assert "- 'linux-agent/**'" in ci
     assert "- 'shared-core/**'" in ci
-    assert 'docker build -f linux-agent/Dockerfile' in ci
+    assert 'docker buildx build --load' in ci
+    assert '-f linux-agent/Dockerfile' in ci
+    assert 'mcptoai.ci.job=${CI_KEY}' in ci
     assert 'import mcptoai_core' in ci

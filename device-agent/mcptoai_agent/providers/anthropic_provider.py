@@ -7,6 +7,7 @@ from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
 from ..net import resilient_http_client
 
 from .base import AssistantTurn, Provider, ToolCall, ToolSpec
+from .model_modalities import modalities_for_model
 
 
 class AnthropicProvider(Provider):
@@ -26,7 +27,7 @@ class AnthropicProvider(Provider):
                     "id": m.id,
                     "name": getattr(m, "display_name", None),
                     "task": "chat",
-                    "modalities": ["text"],
+                    "modalities": modalities_for_model(m.id, provider="anthropic"),
                 })
             if not getattr(page, "has_more", False):
                 break
@@ -44,7 +45,21 @@ class AnthropicProvider(Provider):
         for m in messages:
             role = m["role"]
             if role == "user":
-                out.append({"role": "user", "content": m["content"]})
+                images = m.get("images") or []
+                if images or m.get("files"):
+                    import re
+                    content = [{"type": "text", "text": m["content"]}]
+                    for image in images:
+                        data_url = image.get("data_url", "")
+                        match = re.fullmatch(r"data:(image/(?:jpeg|png|gif|webp));base64,([A-Za-z0-9+/]+={0,2})", data_url)
+                        if not match:
+                            raise ValueError("Unsupported Anthropic image format")
+                        content.append({"type": "image", "source": {"type": "base64", "media_type": match.group(1), "data": match.group(2)}})
+                    from mcptoai_core.documents import provider_file_blocks
+                    content += provider_file_blocks(m.get("files", []), "anthropic")
+                    out.append({"role": "user", "content": content})
+                else:
+                    out.append({"role": "user", "content": m["content"]})
             elif role == "assistant":
                 blocks: list[dict] = []
                 if m.get("content"):

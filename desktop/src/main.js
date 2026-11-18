@@ -1,7 +1,11 @@
-const {app,BrowserWindow,ipcMain,shell,dialog}=require('electron');
+const {app,BrowserWindow,ipcMain,shell,dialog,Notification}=require('electron');
+const {requestApprovalAttention}=require('./approval-attention');
 const {autoUpdater}=require('electron-updater');
+const {startInboundApproval}=require('./inbound-upload-approval');
+let stopInboundApproval=()=>{};
 const {compareVersions}=require('./version-compare');
-const {spawnSync}=require('child_process');
+const {spawnSync}=require('./hidden-child-process');
+const activityObservation=require('./activity-observation');
 const agentHandover=require('./agent-handover');
 const path=require('path');const fs=require('fs');const os=require('os');const {installOfficial:installOfficialGitHubMcp}=require('./github-mcp');
 const {googleDesktopClientId}=require('./google-oauth-config');const GOOGLE_DESKTOP_CLIENT_ID=String(process.env.MCPTOAI_GOOGLE_DESKTOP_CLIENT_ID||googleDesktopClientId||'').trim();const {adapter}=require('./platform');const {install:installAgent,status:agentUpdateStatus,upgradeIfNeeded:upgradeAgentIfNeeded}=require('./agent-installer');const platform=adapter();
@@ -12,13 +16,14 @@ function handoverLog(message){desktopLogger.handover(message)}
 const originalConsoleError=console.error.bind(console);
 console.error=(...args)=>{desktopLogger.error(...args);originalConsoleError(...args)};
 const MAC_LOGIN_SERVICE='com.bkty.mcptoai.device-agent';
+const {repairLegacyPlist}=require('./agent-install');
 function macLoginItemState(){if(process.platform!=='darwin'||!app.isPackaged)return {registered:false,status:'not-applicable'};try{const v=app.getLoginItemSettings({type:'loginItemService',serviceName:MAC_LOGIN_SERVICE});return {...v,registered:!['not-registered','not-found'].includes(v.status)}}catch(e){return {registered:false,status:'error',error:e.message}}}
 function registerMacLoginItem(){if(process.platform!=='darwin')return {ok:true};handoverLog('registerMacLoginItem: installAgent preparation');const prep=installAgent(process.resourcesPath);if(!prep?.ok)return prep;try{handoverLog('registerMacLoginItem: SMAppService register requested');app.setLoginItemSettings({openAtLogin:true,type:'loginItemService',serviceName:MAC_LOGIN_SERVICE});const state=macLoginItemState();return {...prep,registered:state.registered,service_status:state.status,ok:state.status!=='error'}}catch(e){return {ok:false,error:e.message}}}
 function unregisterMacLoginItem(){if(process.platform!=='darwin')return {ok:true};try{handoverLog('unregisterMacLoginItem: SMAppService unregister requested');app.setLoginItemSettings({openAtLogin:false,type:'loginItemService',serviceName:MAC_LOGIN_SERVICE});return {ok:true,...macLoginItemState()}}catch(e){return {ok:false,error:e.message}}}
 function macServiceVersionMarker(){return path.join(configRoot,'agent-service-version')}
 function readMacServiceVersion(){try{return fs.readFileSync(macServiceVersionMarker(),'utf8').trim().replace(/\\n$/,'').trim()}catch(e){if(e.code!=='ENOENT')console.error('Agent service marker read failed',e);return ''}}
 function writeMacServiceVersion(){const marker=macServiceVersionMarker(),tmp=marker+'.'+process.pid+'.tmp';try{fs.mkdirSync(configRoot,{recursive:true});fs.writeFileSync(tmp,app.getVersion()+'\n',{mode:0o600});fs.renameSync(tmp,marker);handoverLog('service marker wrote '+marker+' version='+app.getVersion());return true}catch(e){handoverLog('service marker write FAILED '+marker+' '+e.message);try{fs.unlinkSync(tmp)}catch{}return false}}
-function realMacAgentVersion(){const started=Date.now();try{const exe=installedAgentPath();if(!fs.existsSync(exe)){handoverLog('probe missing executable '+exe);return null}const out=require('child_process').execFileSync(exe,['--version'],{encoding:'utf8',timeout:5000});const match=out.match(/mcptoai-agent\s+(\d+\.\d+\.\d+)/);handoverLog('probe --version elapsed_ms='+ (Date.now()-started)+' output='+JSON.stringify(out.trim())+' version='+(match?.[1]||'unparsed'));return match?.[1]||null}catch(e){handoverLog('probe --version failed elapsed_ms='+(Date.now()-started)+' error='+e.message);return null}}
+function realMacAgentVersion(){const started=Date.now();try{const exe=installedAgentPath();if(!fs.existsSync(exe)){handoverLog('probe missing executable '+exe);return null}const out=require('./hidden-child-process').execFileSync(exe,['--version'],{encoding:'utf8',timeout:5000});const match=out.match(/mcptoai-agent\s+(\d+\.\d+\.\d+)/);handoverLog('probe --version elapsed_ms='+ (Date.now()-started)+' output='+JSON.stringify(out.trim())+' version='+(match?.[1]||'unparsed'));return match?.[1]||null}catch(e){handoverLog('probe --version failed elapsed_ms='+(Date.now()-started)+' error='+e.message);return null}}
 function agentStatusWithService(){const s=agentUpdateStatus(process.resourcesPath);if(process.platform!=='darwin')return s;const st=macLoginItemState(),serviceVersion=readMacServiceVersion(),actualVersion=realMacAgentVersion(),serviceNeedsRefresh=actualVersion?actualVersion!==app.getVersion():false;return {...s,registered:st.registered,service_status:st.status,serviceVersion,actualVersion,serviceNeedsRefresh,updateAvailable:s.updateAvailable||!st.registered||serviceNeedsRefresh}}
 
 function installDeviceAgent(){handoverLog('installDeviceAgent: user-requested install');if(process.platform!=='darwin')return installAgent(process.resourcesPath);const r=registerMacLoginItem();if(r?.ok)writeMacServiceVersion();return r}
@@ -49,7 +54,7 @@ function skillCli(args,timeout=180000){
   // Uzun GitHub işlemleri Electron ana iş parçacığını bloke etmez.
   return new Promise(resolve=>{
     let a;try{a=agentExecutable()}catch(e){return resolve({ok:false,error:e.message})}
-    const {execFile}=require('child_process');
+    const {execFile}=require('./hidden-child-process');
     execFile(a.cmd,[...a.prefix,'skills',...args],{cwd:a.cwd,encoding:'utf8',timeout,maxBuffer:4*1024*1024},(error,stdout,stderr)=>{
       if(error)return resolve({ok:false,error:String(stderr||error.message||stdout||'Skill operation failed').trim().slice(-1200)});
       try{resolve({ok:true,data:JSON.parse(stdout)})}catch{resolve({ok:true,message:stdout.trim()})}
@@ -75,7 +80,7 @@ ipcMain.handle('config:capability-permission',(_,name,permission)=>{const allowe
 ipcMain.handle('config:tool-permission',(_,name,permission)=>{if(!['auto','confirm','deny'].includes(permission))return {ok:false};const c=readConfig();c.tools={...(c.tools||{}),[name]:permission};writeConfig(c);return {ok:true}});
 ipcMain.handle('config:server-enabled',(_,id,enabled)=>{const c=readConfig();const server=(c.servers||[]).find(x=>x.id===id);if(!server)return {ok:false};server.enabled=!!enabled;writeConfig(c);return {ok:true}});
 ipcMain.handle('config:server-add',(_,draft)=>{const a=agentExecutable(),payload={name:String(draft.name||'').trim(),transport:draft.transport==='stdio'?'stdio':'streamable-http',command:String(draft.command||'').trim(),args:Array.isArray(draft.args)?draft.args.map(String):[],env:draft.env&&typeof draft.env==='object'?draft.env:{},url:String(draft.url||'').trim(),headers:draft.headers&&typeof draft.headers==='object'?draft.headers:{},oauth:draft.oauth&&typeof draft.oauth==='object'?draft.oauth:{}};const r=spawnSync(a.cmd,[...a.prefix,'add-mcp-json'],{cwd:a.cwd,input:JSON.stringify(payload),encoding:'utf8',timeout:15000});if(r.status!==0)return {ok:false,error:(r.stderr||'Could not add MCP server').trim().split('\n').pop()};try{return JSON.parse(r.stdout)}catch{return {ok:false,error:'Invalid MCP response'}}});
-ipcMain.handle('config:server-connect',(_,id)=>new Promise(resolve=>{const a=agentExecutable(),{spawn}=require('child_process'),child=spawn(a.cmd,[...a.prefix,'discover-mcp',id],{cwd:a.cwd,stdio:['ignore','pipe','pipe']});let out='',buf='',err='',authOpened=false;child.stdout.on('data',d=>{const text=d.toString();out+=text;buf+=text;const lines=buf.split(/\r?\n/);buf=lines.pop()||'';for(const line of lines){if(!authOpened&&line.startsWith('AUTH_URL ')){authOpened=true;shell.openExternal(line.slice(9).trim())}}});child.stderr.on('data',d=>err+=d.toString());child.on('close',code=>{if(buf){out+=buf.endsWith('\n')?'':'\n'}if(code!==0){const el=out.split(/\r?\n/).find(x=>x.startsWith('MCP_ERROR '));if(el){try{const e=JSON.parse(el.slice(10));return resolve({ok:false,error:e.message||'MCP connection failed',title:e.title||'MCP connection failed',code:e.code||'connection_failed',detail:e.detail||''})}catch{}}return resolve({ok:false,error:'MCPtoAI could not complete the connection.',title:'MCP connection failed',code:'connection_failed',detail:err.trim().slice(-1200)})}const line=out.split(/\r?\n/).find(x=>x.startsWith('TOOLS '));if(!line)return resolve({ok:false,error:'MCP connected but tool discovery returned no result.'});try{const tools=JSON.parse(line.slice(6)),file=path.join(path.dirname(configPath),'mcp-discovery.json');let d={version:1,servers:{}};try{d=JSON.parse(fs.readFileSync(file,'utf8'))}catch{}d.servers={...(d.servers||{}),[id]:tools};fs.writeFileSync(file,JSON.stringify(d,null,2),{mode:0o600});resolve({ok:true,tools})}catch(e){resolve({ok:false,error:e.message})}});child.on('error',e=>resolve({ok:false,error:e.message}))}));
+ipcMain.handle('config:server-connect',(_,id)=>new Promise(resolve=>{const a=agentExecutable(),{spawn}=require('./hidden-child-process'),child=spawn(a.cmd,[...a.prefix,'discover-mcp',id],{cwd:a.cwd,stdio:['ignore','pipe','pipe']});let out='',buf='',err='',authOpened=false;child.stdout.on('data',d=>{const text=d.toString();out+=text;buf+=text;const lines=buf.split(/\r?\n/);buf=lines.pop()||'';for(const line of lines){if(!authOpened&&line.startsWith('AUTH_URL ')){authOpened=true;shell.openExternal(line.slice(9).trim())}}});child.stderr.on('data',d=>err+=d.toString());child.on('close',code=>{if(buf){out+=buf.endsWith('\n')?'':'\n'}if(code!==0){const el=out.split(/\r?\n/).find(x=>x.startsWith('MCP_ERROR '));if(el){try{const e=JSON.parse(el.slice(10));return resolve({ok:false,error:e.message||'MCP connection failed',title:e.title||'MCP connection failed',code:e.code||'connection_failed',detail:e.detail||''})}catch{}}return resolve({ok:false,error:'MCPtoAI could not complete the connection.',title:'MCP connection failed',code:'connection_failed',detail:err.trim().slice(-1200)})}const line=out.split(/\r?\n/).find(x=>x.startsWith('TOOLS '));if(!line)return resolve({ok:false,error:'MCP connected but tool discovery returned no result.'});try{const tools=JSON.parse(line.slice(6)),file=path.join(path.dirname(configPath),'mcp-discovery.json');let d={version:1,servers:{}};try{d=JSON.parse(fs.readFileSync(file,'utf8'))}catch{}d.servers={...(d.servers||{}),[id]:tools};fs.writeFileSync(file,JSON.stringify(d,null,2),{mode:0o600});resolve({ok:true,tools})}catch(e){resolve({ok:false,error:e.message})}});child.on('error',e=>resolve({ok:false,error:e.message}))}));
 ipcMain.handle('config:server-remove',(_,id)=>{const c=readConfig(),target=(c.servers||[]).find(x=>x.id===id),a=agentExecutable(),r=spawnSync(a.cmd,[...a.prefix,'remove-mcp',String(id)],{cwd:a.cwd,encoding:'utf8',timeout:15000});if(r.status!==0)return {ok:false};clearDiscovery(String(id));if(target?.managed_integration==='github-official'){const marker=path.join(configRoot,'integrations','github','.cleanup-pending');try{fs.mkdirSync(path.dirname(marker),{recursive:true});fs.writeFileSync(marker,'1',{mode:0o600})}catch{}}try{return JSON.parse(r.stdout)}catch{return {ok:false}}});
 
 function discoveryFile(){return path.join(path.dirname(configPath),'mcp-discovery.json')}
@@ -102,7 +107,7 @@ ipcMain.handle('tools:gdrive-connect',async(_,draft={})=>{try{
     server.managed_integration='google-drive-picker';writeConfig(c);
   }
   return await new Promise(resolve=>{
-    const {spawn}=require('child_process');const child=spawn(a.cmd,[...a.prefix,'google-drive-auth-json'],{cwd:a.cwd,stdio:['pipe','pipe','pipe'],env:{...process.env,MCPTOAI_GOOGLE_DESKTOP_CLIENT_ID:GOOGLE_DESKTOP_CLIENT_ID}});
+    const {spawn}=require('./hidden-child-process');const child=spawn(a.cmd,[...a.prefix,'google-drive-auth-json'],{cwd:a.cwd,stdio:['pipe','pipe','pipe'],env:{...process.env,MCPTOAI_GOOGLE_DESKTOP_CLIENT_ID:GOOGLE_DESKTOP_CLIENT_ID}});
     let out='',buf='',err='',opened=false;child.stdin.end(JSON.stringify({mode:draft.mode==='byo'?'byo':'managed',client_id:String(draft.client_id||''),client_secret:String(draft.client_secret||''),append:!!draft.append}));
     child.stdout.on('data',d=>{const text=d.toString();out+=text;buf+=text;const lines=buf.split(/\r?\n/);buf=lines.pop()||'';for(const line of lines){if(!opened&&line.startsWith('AUTH_URL ')){opened=true;shell.openExternal(line.slice(9).trim())}}});
     child.stderr.on('data',d=>err+=d.toString());
@@ -160,7 +165,7 @@ ipcMain.handle('chatgpt:auth',(event,action)=>new Promise(resolve=>{
   if(!trustedSiwcSender(event))return resolve({ok:false,error:'Untrusted SIWC caller'});
   if(!['status','login','logout','cleanup-unlinked','clear-local'].includes(action))return resolve({ok:false,error:'Invalid action'});
   let a;try{a=agentExecutable()}catch{return resolve({ok:false,error:'Agent unavailable'})}
-  const {spawn}=require('child_process');
+  const {spawn}=require('./hidden-child-process');
   const child=spawn(a.cmd,[...a.prefix,'chatgpt-auth',action],{cwd:a.cwd,stdio:['ignore','pipe','pipe'],windowsHide:true});
   let output='';let stderr='';child.stderr.on('data',chunk=>{if(stderr.length<8192)stderr+=chunk.toString()});let settled=false;const finish=v=>{if(settled)return;settled=true;clearTimeout(timer);resolve(v)};
   const timer=setTimeout(()=>{child.kill();finish({ok:false,error:'ChatGPT authentication timed out'})},action==='login'?210000:30000);
@@ -186,18 +191,18 @@ ipcMain.handle('permissions:open',(_,kind)=>{if(process.platform==='win32'){cons
 ipcMain.handle('activity:list',async()=>{
   const a=agentExecutable();
   return await new Promise(resolve=>{
-    const {execFile}=require('child_process');
+    const {execFile}=require('./hidden-child-process');
     execFile(a.cmd,[...a.prefix,'activity-list'],{cwd:a.cwd,timeout:10000,maxBuffer:256*1024,windowsHide:true},(error,stdout)=>{
-      if(error)return resolve({ok:false,error:'Local activity unavailable'});
-      try{const data=JSON.parse(stdout);resolve({ok:true,items:Array.isArray(data)?data.slice(0,100):[]})}
-      catch{resolve({ok:false,error:'Invalid activity response'})}
+      if(error)return resolve({ok:false,error:'Local activity unavailable',last_observed:activityObservation.read(configRoot)});
+      try{const data=JSON.parse(stdout),items=Array.isArray(data)?data.slice(0,100):[];let last=null;try{last=activityObservation.update(configRoot,items)}catch{}resolve({ok:true,items,last_observed:last})}
+      catch{resolve({ok:false,error:'Invalid activity response',last_observed:activityObservation.read(configRoot)})}
     });
   });
 });
 function activityCli(args){const a=agentExecutable(),r=spawnSync(a.cmd,[...a.prefix,...args],{cwd:a.cwd,encoding:'utf8',timeout:15000,windowsHide:true});if(r.status!==0)return {ok:false,error:'Activity operation failed'};try{return {ok:true,...JSON.parse(r.stdout)}}catch{return {ok:false,error:'Invalid activity response'}}}
 ipcMain.handle('activity:status',()=>activityCli(['activity-status']));
 ipcMain.handle('activity:recording',(_,on)=>typeof on==='boolean'?activityCli(['activity-recording',on?'on':'off']):{ok:false});
-ipcMain.handle('activity:clear',()=>activityCli(['activity-clear','--confirm']));
+ipcMain.handle('activity:clear',()=>{const result=activityCli(['activity-clear','--confirm']);if(result.ok)activityObservation.clear(configRoot);return result});
 ipcMain.handle('agent:status',()=>platform.status());
 ipcMain.handle('agent:install',()=>installDeviceAgent());
 ipcMain.handle('permissions:mark-seen',()=>{const c=readSettings();c.permissions_onboarding_seen=true;writeSettings(c);return {ok:true}});
@@ -209,7 +214,7 @@ ipcMain.handle('pairing:open-url',()=>pendingPairingUrl?shell.openExternal(pendi
 ipcMain.handle('agent:login',async()=>{
  const exe=installedAgentPath();if(!exe||!fs.existsSync(exe))return {ok:false,error:'Install the agent first.'};
  return new Promise(resolve=>{
-  const {spawn}=require('child_process');
+  const {spawn}=require('./hidden-child-process');
   pendingPairingUrl='';const child=spawn(exe,['login'],{stdio:['ignore','pipe','pipe'],windowsHide:true,env:{...process.env,PYTHONUTF8:'1',PYTHONIOENCODING:'utf-8'}});
   let output='',stderr='',url='',browserError='',finished=false;
   const done=result=>{if(!finished){finished=true;clearTimeout(watchdog);resolve(result)}};
@@ -253,10 +258,10 @@ let desktopChatProcess=null,desktopChatBuffer='',desktopChatWaiters=new Map();
 // Terminal komutları: yerel izin. Agent'ın shell-access komutuyla okunur/yazılır; web ya da
 // relay bu izni değiştiremez. Araçlar başlangıçta kaydedildiği için değişiklikten sonra agent
 // ve yerel sohbet süreci yeniden başlatılır.
-function shellAccess(action){const a=agentExecutable(),{spawnSync}=require('child_process');const r=spawnSync(a.cmd,[...a.prefix,'shell-access',action],{cwd:a.cwd,encoding:'utf8',timeout:20000});if(r.status!==0)return {ok:false,error:(r.stderr||'').trim().split('\n').pop()||'shell-access failed'};try{const lines=String(r.stdout||'').trim().split(/\r?\n/);return {ok:true,...JSON.parse(lines[lines.length-1])}}catch{return {ok:false,error:'Unexpected agent response'}}}
+function shellAccess(action){const a=agentExecutable(),{spawnSync}=require('./hidden-child-process');const r=spawnSync(a.cmd,[...a.prefix,'shell-access',action],{cwd:a.cwd,encoding:'utf8',timeout:20000});if(r.status!==0)return {ok:false,error:(r.stderr||'').trim().split('\n').pop()||'shell-access failed'};try{const lines=String(r.stdout||'').trim().split(/\r?\n/);return {ok:true,...JSON.parse(lines[lines.length-1])}}catch{return {ok:false,error:'Unexpected agent response'}}}
 ipcMain.handle('shell:access',()=>shellAccess('status'));
 ipcMain.handle('shell:set-access',async(_,on)=>{const r=shellAccess(on===true?'on':'off');if(!r.ok)return r;if(desktopChatProcess){try{desktopChatProcess.kill()}catch{}desktopChatProcess=null}try{await platform.restart()}catch{}return r});
-function ensureDesktopChat(){if(desktopChatProcess&&!desktopChatProcess.killed)return desktopChatProcess;const a=agentExecutable(),{spawn}=require('child_process');desktopChatProcess=spawn(a.cmd,[...a.prefix,'desktop-chat-jsonl'],{cwd:a.cwd,stdio:['pipe','pipe','pipe']});desktopChatBuffer='';desktopChatProcess.stdout.on('data',chunk=>{desktopChatBuffer+=chunk.toString();const lines=desktopChatBuffer.split(/\r?\n/);desktopChatBuffer=lines.pop()||'';for(const line of lines){if(!line.trim())continue;let msg;try{msg=JSON.parse(line)}catch{continue}const sid=msg.session_id,w=desktopChatWaiters.get(sid);if(msg.kind==='approval_required'){rememberApproval(msg);BrowserWindow.getAllWindows()[0]?.webContents.send('chat:approval',msg);continue}if(msg.kind==='event'){BrowserWindow.getAllWindows()[0]?.webContents.send('chat:event',msg);if(w){w.events.push(msg.event);if(msg.event?.type==='text')w.text=msg.event.text;if(msg.event?.type==='error')w.error=String(msg.event.message||'Agent failed').slice(0,2000)}continue}if(msg.kind==='turn_done'&&w){desktopChatWaiters.delete(sid);w.resolve(w.error?{ok:false,error:w.error,events:w.events||[]}:{ok:true,text:w.text||'',events:w.events||[]})}}});desktopChatProcess.on('exit',()=>{for(const [,w] of desktopChatWaiters){w.resolve({ok:false,error:'Local chat agent stopped.'})}desktopChatWaiters.clear();desktopChatProcess=null});return desktopChatProcess}
+function ensureDesktopChat(){if(desktopChatProcess&&!desktopChatProcess.killed)return desktopChatProcess;const a=agentExecutable(),{spawn}=require('./hidden-child-process');desktopChatProcess=spawn(a.cmd,[...a.prefix,'desktop-chat-jsonl'],{cwd:a.cwd,stdio:['pipe','pipe','pipe']});desktopChatBuffer='';desktopChatProcess.stdout.on('data',chunk=>{desktopChatBuffer+=chunk.toString();const lines=desktopChatBuffer.split(/\r?\n/);desktopChatBuffer=lines.pop()||'';for(const line of lines){if(!line.trim())continue;let msg;try{msg=JSON.parse(line)}catch{continue}const sid=msg.session_id,w=desktopChatWaiters.get(sid);if(msg.kind==='approval_required'){rememberApproval(msg);if(msg.native_action===true){void showNativeActionApproval(msg);continue}BrowserWindow.getAllWindows()[0]?.webContents.send('chat:approval',msg);continue}if(msg.kind==='event'){BrowserWindow.getAllWindows()[0]?.webContents.send('chat:event',msg);if(w){w.events.push(msg.event);if(msg.event?.type==='text')w.text=msg.event.text;if(msg.event?.type==='error')w.error=String(msg.event.message||'Agent failed').slice(0,2000)}continue}if(msg.kind==='turn_done'&&w){desktopChatWaiters.delete(sid);w.resolve(w.error?{ok:false,error:w.error,events:w.events||[]}:{ok:true,text:w.text||'',events:w.events||[]})}}});desktopChatProcess.on('exit',()=>{for(const [,w] of desktopChatWaiters){w.resolve({ok:false,error:'Local chat agent stopped.'})}desktopChatWaiters.clear();desktopChatProcess=null});return desktopChatProcess}
 ipcMain.handle('chat:pick-files',async()=>{const r=await dialog.showOpenDialog({properties:['openFile','multiSelections'],filters:[{name:'Images & text',extensions:['png','jpg','jpeg','webp','gif','txt','md','json','csv','log','py','js','ts','tsx','jsx','html','css','yaml','yml','xml','sql']}]});if(r.canceled)return {ok:true,files:[]};const out=[];let total=0;for(const file of r.filePaths.slice(0,8)){const st=fs.statSync(file);if(st.size>256*1024)continue;const ext=path.extname(file).toLowerCase(),name=path.basename(file),buf=fs.readFileSync(file);total+=buf.length;if(total>512*1024)break;if(['.png','.jpg','.jpeg','.webp','.gif'].includes(ext)){const mime=ext==='.png'?'image/png':ext==='.webp'?'image/webp':ext==='.gif'?'image/gif':'image/jpeg';out.push({kind:'image',name,data_url:`data:${mime};base64,${buf.toString('base64')}`})}else out.push({kind:'text',name,text:buf.toString('utf8')})}return {ok:true,files:out}});
 ipcMain.handle('chat:local',(_,payload)=>new Promise(resolve=>{if(payload?.provider==='chatgpt'){const a=agentExecutable(),r=spawnSync(a.cmd,[...a.prefix,'siwc-preview','status'],{cwd:a.cwd,encoding:'utf8',timeout:5000});let enabled=false;try{enabled=r.status===0&&JSON.parse(r.stdout).enabled===true}catch{}if(!enabled)return resolve({ok:false,error:'ChatGPT Preview is off. Enable it in Desktop settings.'})}const text=String(payload?.text||'').trim();if(!text||Buffer.byteLength(text)>256*1024)return resolve({ok:false,error:'Invalid message'});const sid=String(payload?.session_id||'local').slice(0,128);if(desktopChatWaiters.has(sid))return resolve({ok:false,error:'A message is already running in this local chat.'});const child=ensureDesktopChat();desktopChatWaiters.set(sid,{resolve,text:'',events:[]});child.stdin.write(JSON.stringify({type:'message',session_id:sid,text,language:payload?.language||null,provider:String(payload?.provider||'').slice(0,80),model:String(payload?.model||'').slice(0,160),images:Array.isArray(payload?.images)?payload.images.slice(0,8):[],preferred_mcp_server_ids:Array.isArray(payload?.preferred_mcp_server_ids)?payload.preferred_mcp_server_ids.slice(0,32):[],capability:String(payload?.capability||'').slice(0,40),context:Array.isArray(payload?.context)?payload.context.slice(-40):[]})+'\n')}));
 ipcMain.handle('chat:cancel',(_,v)=>{const sid=String(v?.session_id||'local').slice(0,128),w=desktopChatWaiters.get(sid),child=desktopChatProcess;if(!w||!child||child.killed)return {ok:false,error:'No local message is running.'};child.stdin.write(JSON.stringify({type:'cancel',session_id:sid})+'\n');return {ok:true}});
@@ -266,13 +271,46 @@ ipcMain.handle('chat:cancel',(_,v)=>{const sid=String(v?.session_id||'local').sl
 // kısa bir süre sonra düşer.
 const APPROVAL_TTL_MS=(Number(process.env.MCPTOAI_APPROVAL_TIMEOUT)||7200)*1000+5000;
 const pendingChatApprovals=new Map();
-function rememberApproval(msg){const aid=String(msg?.approval_id||''),sid=String(msg?.session_id||'');if(!/^[a-f0-9]{32}$/i.test(aid)||!sid)return;pendingChatApprovals.set(aid,{sid,timer:setTimeout(()=>pendingChatApprovals.delete(aid),APPROVAL_TTL_MS)})}
-ipcMain.handle('chat:approval',(_,v)=>{const child=desktopChatProcess,aid=String(v?.approval_id||'');if(!child||!/^[a-f0-9]{32}$/i.test(aid))return {ok:false};const item=pendingChatApprovals.get(aid);if(!item)return {ok:false,error:'This approval has expired.'};clearTimeout(item.timer);pendingChatApprovals.delete(aid);child.stdin.write(JSON.stringify({type:'approval',approval_id:aid,session_id:item.sid,approve:v?.approve===true})+'\n');return {ok:true}});
+// Opt-in Action Tools approvals are rendered by Electron main, never by the web
+// renderer. Only a local native dialog response can resolve a native pending ID.
+async function showNativeActionApproval(msg){
+  const aid=String(msg?.approval_id||'');
+  const pending=pendingChatApprovals.get(aid);
+  if(!pending||!pending.native)return;
+  const args=msg.arguments||{};
+  const target=String(args.path||args.url||'').slice(0,400);
+  const {createHash}=require('crypto');
+  const safeArgs={...args};delete safeArgs._mcptoai_native_action;delete safeArgs._approval_meta;
+  const action=({read_file:'file.read',write_file:'file.write',open_url:'url.open'})[msg.tool];
+  if(!action){resolveNativeAction(aid,false);return}
+  const sorted=Object.fromEntries(Object.entries(safeArgs).sort(([a],[b])=>a.localeCompare(b)));
+  const canonical=JSON.stringify({arguments:sorted,name:action,version:1});
+  const digest=createHash('sha256').update(canonical).digest('hex');
+  const win=BrowserWindow.getAllWindows().find(w=>!w.isDestroyed());
+  if(!win){resolveNativeAction(aid,false);return}
+  try{
+    requestApprovalAttention(win,Notification,'MCPtoAI — Local action approval');
+    const result=await dialog.showMessageBox(win,{type:'warning',title:'MCPtoAI — Local action approval',
+      message:'Approve this action on your device?',
+      detail:`Tool: ${action}\nTarget: ${target}\nAction SHA-256: ${digest}\n\nApproval applies only to this exact request and expires shortly.`,
+      buttons:['Deny','Approve once'],defaultId:0,cancelId:0,noLink:true});
+    resolveNativeAction(aid,result.response===1);
+  }catch{resolveNativeAction(aid,false)}
+}
+function resolveNativeAction(aid,approved){
+  const item=pendingChatApprovals.get(aid),child=desktopChatProcess;
+  if(!item||!item.native||!child||child.killed)return;
+  clearTimeout(item.timer);pendingChatApprovals.delete(aid);
+  child.stdin.write(JSON.stringify({type:'approval',approval_id:aid,session_id:item.sid,approve:approved===true})+'\n');
+}
+function rememberApproval(msg){const aid=String(msg?.approval_id||''),sid=String(msg?.session_id||'');if(!/^[a-f0-9]{32}$/i.test(aid)||!sid)return;pendingChatApprovals.set(aid,{sid,native:msg.native_action===true,timer:setTimeout(()=>pendingChatApprovals.delete(aid),APPROVAL_TTL_MS)})}
+ipcMain.handle('chat:approval',(_,v)=>{const child=desktopChatProcess,aid=String(v?.approval_id||'');if(!child||!/^[a-f0-9]{32}$/i.test(aid))return {ok:false};const item=pendingChatApprovals.get(aid);if(!item)return {ok:false,error:'This approval has expired.'};if(item.native)return {ok:false,error:'Native approval cannot be supplied by the renderer.'};clearTimeout(item.timer);pendingChatApprovals.delete(aid);child.stdin.write(JSON.stringify({type:'approval',approval_id:aid,session_id:item.sid,approve:v?.approve===true})+'\n');return {ok:true}});
 let cloudIpcProcess=null,cloudIpcBuffer='',cloudIpcQueue=[],cloudIpcActive=null,cloudIpcErr='';
 function finishCloudIpc(item,value){if(!item||cloudIpcActive!==item)return;clearTimeout(item.timer);cloudIpcActive=null;item.resolve(value);setImmediate(pumpCloudIpc)}
+function cloudIpcAgentExecutable(a){if(process.platform!=='win32'||a.prefix.length)return a;const quiet=path.join(path.dirname(a.cmd),'mcptoai-agent-background.exe');return fs.existsSync(quiet)?{...a,cmd:quiet}:a}
 function ensureCloudIpc(){
   if(cloudIpcProcess&&!cloudIpcProcess.killed)return cloudIpcProcess;
-  const a=agentExecutable(),{spawn}=require('child_process'),child=spawn(a.cmd,[...a.prefix,'cloud-ipc-jsonl'],{cwd:a.cwd,stdio:['pipe','pipe','pipe'],windowsHide:true});
+  const a=cloudIpcAgentExecutable(agentExecutable()),{spawn}=require('./hidden-child-process'),child=spawn(a.cmd,[...a.prefix,'cloud-ipc-jsonl'],{cwd:a.cwd,stdio:['pipe','pipe','pipe'],windowsHide:true});
   cloudIpcProcess=child;cloudIpcBuffer='';cloudIpcErr='';
   child.stdout.on('data',d=>{
     if(cloudIpcProcess!==child)return;
@@ -324,6 +362,7 @@ function agentIpc(request){
   return new Promise(resolve=>{const net=require('net'),sock=path.join(configRoot,'agent.sock'),client=net.createConnection(sock);let data='',done=false;const finish=v=>{if(done)return;done=true;client.destroy();resolve(v)};client.setTimeout(20000);client.on('connect',()=>client.write(JSON.stringify(request)+'\n'));client.on('data',d=>{data+=d.toString();if(Buffer.byteLength(data)>4*1024*1024)return finish({ok:false,error:'Cloud chat response too large'});const i=data.indexOf('\n');if(i>=0){try{finish(JSON.parse(data.slice(0,i)))}catch{finish({ok:false,error:'Invalid agent response'})}}});client.on('timeout',()=>finish({ok:false,error:'Device Agent did not respond.'}));client.on('error',e=>finish({ok:false,error:e.message}))})
 }
 app.on('before-quit',()=>{try{cloudIpcProcess?.kill()}catch{}});
+app.on('before-quit',()=>{try{stopInboundApproval()}catch{}});
 
 ipcMain.handle('chat:cloud-list',(_,v)=>agentIpc({action:'cloud_chats_list',archived:v?.archived===true}));
 ipcMain.handle('chat:cloud-get',(_,id)=>/^[0-9a-f-]{36}$/i.test(String(id||''))?agentIpc({action:'cloud_chat_get',session_id:String(id)}):({ok:false,error:'Invalid chat ID'}));
@@ -336,7 +375,7 @@ function tailFile(file,maxBytes=65536,maxLines=120){try{const st=fs.statSync(fil
 ipcMain.handle('logs:tail',(_,kind='agent')=>{if(!platform.logPath)return 'No Agent log entries yet.';const dir=path.dirname(platform.logPath),runtime=[tailFile(platform.logPath),tailFile(path.join(dir,'agent-error.log'))].filter(Boolean).join('\n');if(kind!=='errors')return runtime||'No Agent log entries yet.';const lines=runtime.split('\n'),out=[];for(let i=0;i<lines.length;i++){if(/\[ERROR\]|Traceback|Exception|RuntimeError|PermissionError|Unauthorized|Forbidden/i.test(lines[i]))out.push(...lines.slice(i,Math.min(i+8,lines.length)))}return [...new Set(out)].slice(-120).join('\n')||'No error entries.'});
 ipcMain.handle('open:web',()=>shell.openExternal('https://app.mcptoai.com'));ipcMain.handle('open:legal',(_,page)=>shell.openExternal(page==='terms'?'https://app.mcptoai.com/terms':'https://app.mcptoai.com/privacy'));
 const singleInstance=app.requestSingleInstanceLock();
-if(!singleInstance)app.quit();else{app.on('before-quit',()=>handoverLog('Desktop Quit: no agent action'));app.on('second-instance',()=>{const w=BrowserWindow.getAllWindows()[0];if(w){if(w.isMinimized())w.restore();w.focus()}});app.whenReady().then(async()=>{if(app.isPackaged){try{const current=installedAgentPath();let skipHandover=false;
+if(!singleInstance)app.quit();else{app.on('before-quit',()=>handoverLog('Desktop Quit: no agent action'));app.on('second-instance',()=>{const w=BrowserWindow.getAllWindows()[0];if(w){if(w.isMinimized())w.restore();w.focus()}});app.whenReady().then(async()=>{try{stopInboundApproval=startInboundApproval({dialog,BrowserWindow,Notification})}catch(e){console.error('Inbound approval IPC unavailable',e.message)}if(app.isPackaged){try{const current=installedAgentPath();let skipHandover=false;
 if(process.platform==='win32'){
   handoverLog('Desktop startup: Windows agent upgrade before handover');
   const upgrade=await autoUpgradeDeviceAgent();
@@ -348,12 +387,14 @@ if(process.platform==='win32'){
       const marker=path.join(configRoot,'desktop-agent-handover.json');
       fs.mkdirSync(configRoot,{recursive:true});
       const tmp=marker+'.'+process.pid+'.tmp';
-      fs.writeFileSync(tmp,JSON.stringify({version:app.getVersion()})+'\n',{mode:0o600});
+      const build=(()=>{try{return String(JSON.parse(fs.readFileSync(path.join(process.resourcesPath,'build-info.json'),'utf8')).commit||'')}catch{return ''}})();
+      fs.writeFileSync(tmp,JSON.stringify(agentHandover.markerData(app.getVersion(),build))+'\n',{mode:0o600});
       fs.renameSync(tmp,marker);
       handoverLog('Windows upgrade installed, started once, marker persisted; skip second handover');
       skipHandover=true;
     }else{console.error('Windows agent upgrade verification failed',verified);skipHandover=true}
   }
 }
+if(process.platform==='darwin'){const repair=repairLegacyPlist();handoverLog('Legacy LaunchAgent bundle association: '+JSON.stringify(repair));if(!repair.ok){console.error('Legacy LaunchAgent repair failed',repair.error);handoverLog('LaunchAgent repair blocking error: '+repair.error);await dialog.showMessageBox({type:'error',title:'MCPtoAI — Device Agent could not start',message:'MCPtoAI could not activate the background Device Agent.',detail:'Your device may be offline until the Agent service is repaired.\n\n'+String(repair.error||'LaunchAgent registration failed'),buttons:['OK'],defaultId:0})}}
 if(!skipHandover&&fs.existsSync(current)){handoverLog('Desktop startup: handover check current='+current+' version='+app.getVersion());const build=(()=>{try{return String(JSON.parse(fs.readFileSync(path.join(process.resourcesPath,'build-info.json'),'utf8')).commit||'')}catch{return ''}})();const result=await agentHandover.handoverOnStartup({current,version:app.getVersion(),build,configRoot,serviceStop:()=>{handoverLog('handoverOnStartup: platform.stop');return platform.stop()},serviceStart:()=>{handoverLog('handoverOnStartup: platform.start');return platform.start()},serviceRestart:()=>{handoverLog('handoverOnStartup: platform.restart launchctl kickstart -k');return platform.restart()},servicePid:()=>platform.servicePid(),probeVersion:process.platform==='darwin'?()=>realMacAgentVersion():undefined,log:handoverLog});handoverLog('handoverOnStartup result='+JSON.stringify(result));if(!result.ok)console.error('Agent handover incomplete',result)}
 }catch(e){console.error('Agent handover failed',e.message)}}create()});}app.on('window-all-closed',()=>{if(process.platform!=='darwin')app.quit()});app.on('activate',()=>{if(BrowserWindow.getAllWindows().length===0)create()});

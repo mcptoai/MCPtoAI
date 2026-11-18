@@ -1,5 +1,6 @@
 """Shared WebSocket receive loop, preserving adapter socket ownership."""
 import json
+from .documents import MAX_RELAY_BYTES
 
 async def receive_messages(socket, handle):
     async for raw in socket:
@@ -19,4 +20,4 @@ def open_relay(connect, url, headers):
     the socket, and the connected/disconnected state.
     """
     return connect(url, additional_headers=headers, ping_interval=20,
-                   ping_timeout=20, max_size=2**20)
+                   ping_timeout=20, max_size=MAX_RELAY_BYTES)

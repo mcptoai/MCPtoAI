@@ -8,7 +8,7 @@ import threading
 log = logging.getLogger(__name__)
 
 
-def supervise(command, *, popen=subprocess.Popen, wait=None, pause=None):
+def supervise(command, *, popen=None, wait=None, pause=None):
     """Restart crashes; exit cleanly after a child exits 0 or supervisor Stop."""
     from .windows_job import create_kill_on_close_job
     job = create_kill_on_close_job()
@@ -28,6 +28,8 @@ def supervise(command, *, popen=subprocess.Popen, wait=None, pause=None):
             old[sig] = signal.signal(sig, on_stop)
         except ValueError:
             pass
+    if popen is None:
+        from .process_spawn import popen
     delay = 1
     try:
         while not stop.is_set():

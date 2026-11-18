@@ -1,5 +1,5 @@
 const fs=require('fs'),path=require('path'),os=require('os'),crypto=require('crypto');
-const {execFileSync}=require('child_process');
+const {execFileSync}=require('./hidden-child-process');
 const RUN_KEY='HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 const RUN_VALUE='MCPtoAI Agent';
 function base(){return process.env.LOCALAPPDATA||path.join(os.homedir(),'AppData','Local')}
@@ -32,10 +32,10 @@ function stop(exe,log=()=>{}){
  $remaining=@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and ([string]::Equals($_.ExecutablePath,$exe,[StringComparison]::OrdinalIgnoreCase) -or [string]::Equals($_.ExecutablePath,$quiet,[StringComparison]::OrdinalIgnoreCase)) });
  if($remaining.Count -gt 0){throw 'Supervisor/agent processes did not exit'};
  Write-Output 'stop complete: no agent processes remain'`;
- try{const output=execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',stdio:'pipe',timeout:30000});for(const line of output.split(/\r?\n/)){if(line.trim())log('Windows agent upgrade: '+line)}}
+ try{const output=execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',stdio:'pipe',timeout:30000,windowsHide:true});for(const line of output.split(/\r?\n/)){if(line.trim())log('Windows agent upgrade: '+line)}}
  catch(e){log('Windows agent upgrade: stop failed '+e.message);throw e}
 }
-function removeLegacyTask(){try{execFileSync('schtasks.exe',['/Delete','/F','/TN','MCPtoAI Agent'],{stdio:'ignore'})}catch{}}
+function removeLegacyTask(){try{execFileSync('schtasks.exe',['/Delete','/F','/TN','MCPtoAI Agent'],{stdio:'ignore',windowsHide:true})}catch{}}
 function backgroundExe(exe){const quiet=path.join(path.dirname(exe),'mcptoai-agent-background.exe');if(!fs.existsSync(quiet))throw new Error('Background supervisor executable missing');return quiet}
 function installRestartTask(exe){
  exe=backgroundExe(exe);
@@ -57,18 +57,18 @@ function installRestartTask(exe){
  if($task.Settings.MultipleInstances -ne 'IgnoreNew'){throw 'Multiple-instance policy missing'};
  if(-not @($task.Triggers | Where-Object {$_.Repetition.Interval -eq 'PT5M' -and -not $_.Repetition.Duration -and $_.StartBoundary}).Count){throw 'registration-time indefinite 5-minute trigger missing'};
  Start-ScheduledTask -TaskName $name`;
- execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',timeout:30000,stdio:'pipe'});
+ execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',timeout:30000,stdio:'pipe',windowsHide:true});
  // Remove legacy Run ONLY after the restartable task has been registered.
  // Missing value is fine; failure to delete an existing value is NOT fine:
  // otherwise both Task Scheduler and Run may launch supervisors at logon.
  let exists=false;
- try{execFileSync('reg.exe',['QUERY',RUN_KEY,'/v',RUN_VALUE],{stdio:'ignore'});exists=true}catch{}
+ try{execFileSync('reg.exe',['QUERY',RUN_KEY,'/v',RUN_VALUE],{stdio:'ignore',windowsHide:true});exists=true}catch{}
  if(exists){
-   execFileSync('reg.exe',['DELETE',RUN_KEY,'/v',RUN_VALUE,'/f'],{stdio:'pipe'});
-   try{execFileSync('reg.exe',['QUERY',RUN_KEY,'/v',RUN_VALUE],{stdio:'ignore'});throw new Error('Legacy Run value still exists after removal')}catch(e){if(e.message.includes('Legacy Run value'))throw e}
+   execFileSync('reg.exe',['DELETE',RUN_KEY,'/v',RUN_VALUE,'/f'],{stdio:'pipe',windowsHide:true});
+   try{execFileSync('reg.exe',['QUERY',RUN_KEY,'/v',RUN_VALUE],{stdio:'ignore',windowsHide:true});throw new Error('Legacy Run value still exists after removal')}catch(e){if(e.message.includes('Legacy Run value'))throw e}
  }
 }
-function health(exe){execFileSync(exe,['--help'],{stdio:'ignore',timeout:15000})}
+function health(exe){execFileSync(exe,['--help'],{stdio:'ignore',timeout:15000,windowsHide:true})}
 function installedMeta(resourcesPath){const f=path.join(paths(resourcesPath).agentDir,'version.json');try{return JSON.parse(fs.readFileSync(f,'utf8'))}catch{return null}}
 function installedVersion(resourcesPath){const m=installedMeta(resourcesPath);return (m&&m.version)||null}
 function versionParts(v){return String(v||'0').split('.').map(x=>parseInt(x,10)||0)}

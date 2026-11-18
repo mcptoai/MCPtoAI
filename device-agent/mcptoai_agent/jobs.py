@@ -11,6 +11,7 @@ Görevler sohbet turundan ve modelden bağımsızdır:
   bulunmasına da bakar (süreç numarası yeniden kullanılabilir).
 """
 from __future__ import annotations
+from .process_spawn import run, popen
 
 import json
 import os
@@ -153,12 +154,12 @@ class JobManager:
     def _alive_uncached(self, job_id: str, pid: int) -> bool:
         try:
             if os.name == "nt":
-                out = subprocess.run(
+                out = run(
                     ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
                      f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine"],
                     capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL).stdout
             else:
-                out = subprocess.run(["ps", "-ww", "-o", "stat=,args=", "-p", str(int(pid))],
+                out = run(["ps", "-ww", "-o", "stat=,args=", "-p", str(int(pid))],
                                      capture_output=True, text=True, timeout=10).stdout
                 if out.strip().startswith("Z"):
                     return False
@@ -248,7 +249,7 @@ class JobManager:
                     f"mcptoai-{job_id}", command, str(exit_file)]
             extra = {"start_new_session": True}
         with open(d / "output.log", "ab") as out:
-            proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+            proc = popen(args, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
                                     cwd=str(cwd) if cwd else None, env=self.env_factory(), close_fds=True, **extra)
         self._procs[job_id] = proc
         state = {"id": job_id, "name": str(name or "")[:120], "command": command[:4000],
@@ -280,7 +281,7 @@ class JobManager:
         # Durdurulan görevin canlı önbellek kaydı kalmamalı (her platformda).
         self._alive_cache.pop(job_id, None)
         if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=30,
+            run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=30,
                            stdin=subprocess.DEVNULL)
         else:
             try:

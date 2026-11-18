@@ -4,6 +4,7 @@ Only examines the PHP executable on PATH. Does not scan containers, servers,
 other installations or distribution backported security patches.
 """
 from __future__ import annotations
+from .process_spawn import run
 
 import re
 import shutil
@@ -28,7 +29,7 @@ def inspect_php() -> PHPFinding:
     if not executable:
         return PHPFinding("absent", "PHP not found on PATH (other installations not scanned).")
     try:
-        result = subprocess.run([executable, "-v"], capture_output=True,
+        result = run([executable, "-v"], capture_output=True,
                                 text=True, errors="replace", timeout=4, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return PHPFinding("error", f"PHP version check failed: {type(exc).__name__}.")

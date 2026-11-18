@@ -61,3 +61,6 @@ desktop/build/*
 !desktop/build/icon.icns
 !desktop/build/icon.ico
 !desktop/build/entitlements.mac.plist
+
+# Generated from the signed/frozen Agent during packaging; never commit stale hashes
+desktop/agent-version.json

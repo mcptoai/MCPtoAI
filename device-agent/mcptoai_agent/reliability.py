@@ -13,6 +13,11 @@ from pathlib import Path
 
 from .paths import config_dir
 
+from mcptoai_core.receipts import prune_receipts as _prune_receipts
+
+from mcptoai_core.persistence import (load_receipt_payload as _load_receipt_payload,
+    interrupt_running_receipts as _interrupt_running_receipts)
+
 RECEIPT_TTL_SECONDS = 24 * 60 * 60
 MAX_RECEIPTS = 1024
 
@@ -26,37 +31,21 @@ class MessageReceiptStore:
     def _load(self) -> None:
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-            items = raw.get("items") if isinstance(raw, dict) else None
-            if isinstance(items, dict):
-                for message_id, item in items.items():
-                    if isinstance(message_id, str) and isinstance(item, dict):
-                        self._items[message_id] = dict(item)
+            self._items = _load_receipt_payload(raw)
         except FileNotFoundError:
             pass
         except Exception:
             # Reliability metadata must never prevent the agent from starting.
             self._items.clear()
         now = time.time()
-        changed = False
-        for item in self._items.values():
-            if item.get("status") == "running":
-                item["status"] = "interrupted"
-                item["updated_at"] = now
-                changed = True
+        changed = _interrupt_running_receipts(self._items, now)
         changed = self._prune(now) or changed
         if changed:
             self._save()
 
     def _prune(self, now: float | None = None) -> bool:
         now = time.time() if now is None else now
-        before = len(self._items)
-        for key in list(self._items):
-            updated = self._items[key].get("updated_at", 0)
-            if not isinstance(updated, (int, float)) or now - float(updated) > RECEIPT_TTL_SECONDS:
-                self._items.pop(key, None)
-        while len(self._items) > MAX_RECEIPTS:
-            self._items.popitem(last=False)
-        return len(self._items) != before
+        return _prune_receipts(self._items, now, ttl=RECEIPT_TTL_SECONDS, maximum=MAX_RECEIPTS)
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

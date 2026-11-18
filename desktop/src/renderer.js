@@ -242,13 +242,34 @@ $('#installSkill').onclick=async()=>{
 
 const activityText=k=>window.I18N?.t(k)||k;
 let desktopActivityFilter='all';
+// Only device-local Activity metadata can establish a last observation.
+// Never replace a failed read with a claim of live device state.
+let desktopActivityLastObservation=null;
+function activityLastObservedLabel(observation){
+ if(!observation)return '';
+ const date=new Date(observation.timestamp_utc);
+ if(!Number.isFinite(date.getTime()))return '';
+ return 'Last observed on this device · '+date.toLocaleString()+' · local Activity history (not live status)';
+}
+
 async function refreshDesktopActivity(){
  const el=document.querySelector('#activityRows');if(!el)return;
  el.textContent=activityText('activityLoading');
  try{
   const [result,status]=await Promise.all([window.mcp.activityList(),window.mcp.activityStatus()]);
   const toggle=document.querySelector('#activityRecording');if(toggle&&status.ok){toggle.setAttribute('aria-checked',String(status.enabled));toggle.classList.toggle('enabled',status.enabled)}
-  el.replaceChildren();if(!result.ok){el.textContent=result.error||activityText('activityUnavailable');return}
+  if(result.last_observed)desktopActivityLastObservation=result.last_observed;
+  el.replaceChildren();if(!result.ok){
+   el.textContent=(result.error||activityText('activityUnavailable'));
+   const note=activityLastObservedLabel(desktopActivityLastObservation);
+   if(note){const span=document.createElement('div');span.textContent=note;el.append(span)}
+   return;
+  }
+  const latest=(result.items||[]).filter(e=>e&&e.timestamp_utc&&Number.isFinite(new Date(e.timestamp_utc).getTime()))
+    .sort((a,b)=>new Date(b.timestamp_utc)-new Date(a.timestamp_utc))[0];
+  if(latest)desktopActivityLastObservation={timestamp_utc:latest.timestamp_utc,source:'device-local Activity'};
+  const observation=activityLastObservedLabel(desktopActivityLastObservation);
+  if(observation){const note=document.createElement('div');note.textContent=observation;el.append(note)}
   const groups=new Map();for(const event of result.items){if(!event.activity_id)continue;if(!groups.has(event.activity_id))groups.set(event.activity_id,[]);groups.get(event.activity_id).push(event)}
   if(!groups.size){el.textContent=activityText('activityEmpty');return}
   let visibleCount=0;
