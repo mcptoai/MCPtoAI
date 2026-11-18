@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 from mcptoai_core.relay_transport import open_relay
+from mcptoai_core.documents import MAX_RELAY_BYTES
 from mcptoai_linux import relay_client as relay
 
 
@@ -16,7 +17,8 @@ def test_websocket_ping_pong_timeout_is_enabled():
     open_relay(connect,'wss://example.invalid/ws',{'Authorization':'Bearer fake'})
     assert captured['ping_interval']==20
     assert captured['ping_timeout']==20
-    assert captured['max_size']==2**20
+    assert captured['max_size']==MAX_RELAY_BYTES
+    assert 2**20 < MAX_RELAY_BYTES <= 32 * 1024 * 1024  # bounded chat attachment frame
 
 
 def test_silent_ping_timeout_reconnects_without_duplicate_background_tasks(monkeypatch):
