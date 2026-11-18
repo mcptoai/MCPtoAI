@@ -70,7 +70,7 @@ jobs:
             --ignore=shared-core/tests/test_legacy_imports.py \
             --ignore=shared-core/tests/test_packaging_contract.py \
             --ignore=shared-core/tests/test_parity.py \
-            --deselect=shared-core/tests/test_documents.py::test_dependency_pins_match_every_distribution
+            -k 'not test_dependency_pins_match_every_distribution'
 
   desktop-source:
     runs-on: ubuntu-latest
