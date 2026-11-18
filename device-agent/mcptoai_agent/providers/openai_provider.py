@@ -67,6 +67,11 @@ class OpenAIProvider(Provider):
                     content = [{"type":"text","text":content}] + [
                         {"type":"image_url","image_url":{"url":img["data_url"]}} for img in m["images"]
                     ]
+                if m.get("files"):
+                    from mcptoai_core.documents import provider_file_blocks
+                    if isinstance(content, str):
+                        content = [{"type": "text", "text": content}]
+                    content += provider_file_blocks(m["files"], "openai")
                 out.append({"role": "user", "content": content})
             elif role == "assistant":
                 msg: dict = {"role": "assistant", "content": m.get("content") or None}

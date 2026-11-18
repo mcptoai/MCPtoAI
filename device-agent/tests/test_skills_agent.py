@@ -102,6 +102,7 @@ def test_approval_event_carries_active_skill_names(tmp_path: Path):
 
 
 class LoadSkillProvider(Provider):
+    context_window_tokens = 262144
     """load_skill çağırır, sonraki turda modelin gerçekte gördüğü mesajları saklar."""
     name = 'loadskill'
 

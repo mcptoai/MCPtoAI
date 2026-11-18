@@ -27,7 +27,7 @@ _ID = re.compile(r'^[A-Za-z0-9_.:-]{1,128}$')
 FINAL_PHASES = frozenset(('completed', 'failed', 'cancelled', 'timed_out', 'denied'))
 _ARG_FOR = {
     'command': {'run_command': 'command'},
-    'file': {'read_file': 'path', 'write_file': 'path', 'list_dir': 'path', 'send_artifact': 'path', 'find_files': 'root'},
+    'file': {'read_file': 'path', 'write_file': 'path', 'list_dir': 'path', 'send_artifact': 'path', 'file.receive': 'path', 'find_files': 'root'},
     'url': {'open_url': 'url', 'web_fetch': 'url'},
     'application': {'open_app': 'name'},
 }

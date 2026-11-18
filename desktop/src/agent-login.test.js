@@ -14,7 +14,7 @@ function setup({stdout='',stderr='',exit=0,reject=false,timeout=false}={}){
  const context={
   ipcMain:{handle:(name,fn)=>handlers[name]=fn},
   installedAgentPath:()=>'/fake-agent',fs:{existsSync:()=>true},
-  require:(id)=>id==='child_process'?{spawn:(exe,args,opts)=>{assert.equal(opts.env.PYTHONIOENCODING,'utf-8');assert.equal(opts.windowsHide,true);setImmediate(()=>{if(stdout)child.stdout.emit('data',Buffer.from(stdout));if(stderr)child.stderr.emit('data',Buffer.from(stderr));if(!timeout)child.emit('close',exit)});return child}}:require(id),
+  require:(id)=>id==='./hidden-child-process'?{spawn:(exe,args,opts)=>{assert.equal(opts.env.PYTHONIOENCODING,'utf-8');assert.equal(opts.windowsHide,true);setImmediate(()=>{if(stdout)child.stdout.emit('data',Buffer.from(stdout));if(stderr)child.stderr.emit('data',Buffer.from(stderr));if(!timeout)child.emit('close',exit)});return child}}:require(id),
   process:{env:{}},
   shell:{openExternal:url=>{opened.push(url);return reject?Promise.reject(Error('no browser')):Promise.resolve()}},
   BrowserWindow:{getAllWindows:()=>[{webContents:{send:(...args)=>sent.push(args)}}]},

@@ -1,9 +1,9 @@
-const {execFile}=require('child_process');
+const {execFile}=require('./hidden-child-process');
 const os=require('os');
 const path=require('path');
 const fs=require('fs');
 // timedOut: komut zaman sınırını aştı (sonucu bilinmiyor; işlem arka planda tamamlanmış olabilir).
-const run=(cmd,args=[],opts={})=>new Promise(resolve=>execFile(cmd,args,{timeout:opts.timeout||10000},(error,stdout,stderr)=>resolve({ok:!error,timedOut:Boolean(error&&error.killed),stdout:String(stdout||'').trim(),stderr:String(stderr||'').trim()})));
+const run=(cmd,args=[],opts={})=>new Promise(resolve=>execFile(cmd,args,{timeout:opts.timeout||10000,windowsHide:true},(error,stdout,stderr)=>resolve({ok:!error,timedOut:Boolean(error&&error.killed),stdout:String(stdout||'').trim(),stderr:String(stderr||'').trim()})));
 const LABEL='com.bkty.mcptoai.device-agent';
 const MAC_DOMAIN=()=>`gui/${process.getuid()}`;
 const MAC_SERVICE=()=>`${MAC_DOMAIN()}/${LABEL}`;

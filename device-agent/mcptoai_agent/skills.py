@@ -1,5 +1,6 @@
 """Kullanıcının kurduğu, güvenilmeyen skill paketlerinin güvenli erişim katmanı."""
 from __future__ import annotations
+from .process_spawn import run as spawn_run, popen
 import contextvars
 import hashlib
 import io
@@ -397,7 +398,7 @@ def run_skill_script(skill, script, args=None, *, command_env=None, timeout=60, 
     env['PYTHONDONTWRITEBYTECODE'] = '1'
     cmd = [python] + (['-3'] if os.name == 'nt' and Path(python).stem.lower() == 'py' else []) + ['-B', str(path)] + args
     try:
-        result = subprocess.run(cmd, shell=False, cwd=folder, env=env, stdin=subprocess.DEVNULL,
+        result = spawn_run(cmd, shell=False, cwd=folder, env=env, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=min(max(int(timeout), 1), 120))
     except subprocess.TimeoutExpired:
         raise TimeoutError('Skill script timed out')
@@ -585,7 +586,7 @@ def prompt_summary(max_skills=30, max_chars=6000, max_name_chars=1500):
 
 def _export_commit(git, repo, commit, target, env, whole_repository=False):
     """Commit içeriğini .git olmadan hedefe aktarır; bağlantıları ve özel dosyaları reddeder."""
-    proc = subprocess.Popen([git, '-C', str(repo), 'archive', '--format=tar', commit], stdout=subprocess.PIPE,
+    proc = popen([git, '-C', str(repo), 'archive', '--format=tar', commit], stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, env=env)
     data = proc.stdout.read(MAX_PACKAGE_BYTES * 2 + 1)
     if len(data) > MAX_PACKAGE_BYTES * 2:
@@ -642,7 +643,7 @@ def fetch_github(url, commit, target, *, whole_repository=False):
     work = Path(tempfile.mkdtemp(prefix='mcptoai-skill-'))
 
     def run(*args):
-        return subprocess.run([git, '-C', str(work), *args], env=env, stdin=subprocess.DEVNULL,
+        return spawn_run([git, '-C', str(work), *args], env=env, stdin=subprocess.DEVNULL,
                               capture_output=True, timeout=180, check=True)
     try:
         run('init', '-q')

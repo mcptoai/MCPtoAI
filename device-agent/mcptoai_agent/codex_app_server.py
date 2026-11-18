@@ -4,6 +4,7 @@ OAuth registration, PKCE, refresh and secure storage belong to the separate
 SIWC account manager. Never pass API keys or Codex CLI auth files here.
 """
 from __future__ import annotations
+from .process_spawn import popen
 
 import json
 import os
@@ -44,7 +45,7 @@ class CodexAppServer:
         env = dict(os.environ)
         env.pop('OPENAI_API_KEY', None)
         env['ACCESS_TOKEN'] = self._token
-        self.process = subprocess.Popen(
+        self.process = popen(
             [self.executable, *CODEX_ARGS], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, bufsize=1, env=env,

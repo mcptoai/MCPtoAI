@@ -305,7 +305,7 @@ def clear_local():
 
 def list_models():
     data=request_json(RESOURCE+'/models',bearer=access_token())
-    return [{'id':m['slug'],'name':m.get('display_name',m['slug'])} for m in data.get('models',data.get('data',[])) if m.get('visibility')=='list' and isinstance(m.get('slug'),str)]
+    return [{'id':m['slug'],'name':m.get('display_name',m['slug']),**({'modalities':m['modalities']} if isinstance(m.get('modalities'),list) else {})} for m in data.get('models',data.get('data',[])) if m.get('visibility')=='list' and isinstance(m.get('slug'),str)]
 
 
 

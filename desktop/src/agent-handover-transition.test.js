@@ -149,3 +149,45 @@ test('restart unavailable with no running agent writes marker without restarting
   const r=await handoverOnStartup(f.ops);
   assert.equal(r.ok,true);assert.equal(r.noRunningAgent,true);assert.equal(f.state.written,'0.2.7');assert.deepEqual(f.state.killed,[]);
 });
+
+test('Windows same build preserves supervisor, connect, cloud IPC and background tasks',async()=>{
+  const {managed,markerData}=require('./agent-handover');
+  const quiet=win.replace('mcptoai-agent.exe','mcptoai-agent-background.exe');
+  assert.equal(managed(quiet,win,'win32'),true);
+  assert.equal(managed('C:\\Other\\mcptoai-agent-background.exe',win,'win32'),false);
+  assert.deepEqual(markerData('0.2.11','e8f0c85'),{version:'0.2.11',build:'e8f0c85'});
+  const entries=[
+    {pid:301,exe:quiet,commandLine:quiet+' supervise'},
+    {pid:302,exe:quiet,commandLine:quiet+' connect'},
+    {pid:303,exe:quiet,commandLine:quiet+' cloud-ipc-jsonl'},
+  ];
+  const f=fixture({platform:'win32',current:win,previous:'0.2.7',entries});
+  f.ops.build='e8f0c85';
+  f.ops.readFile=()=>JSON.stringify(markerData('0.2.7','e8f0c85'));
+  const r=await handoverOnStartup(f.ops);
+  assert.equal(r.ok,true);assert.equal(r.changed,false);
+  assert.equal(f.state.starts,0);assert.equal(f.state.stops,0);
+  assert.deepEqual(f.state.killed,[]);
+  assert.deepEqual(f.state.entries.map(x=>x.pid),[301,302,303]);
+});
+
+test('Windows handover enumerator distinguishes connect/supervise from cloud-ipc-jsonl',()=>{
+  const fs=require('fs'),path=require('path');
+  const source=fs.readFileSync(path.join(__dirname,'agent-handover.js'),'utf8');
+  assert.match(source,/Name -in @\('mcptoai-agent\.exe','mcptoai-agent-background\.exe'\)/);
+  assert.match(source,/connect\|supervise/);
+  assert.match(source,/const isConnect = entry =>/);
+  assert.doesNotMatch(source,/Name = \\'mcptoai-agent\.exe\\'/);
+});
+
+test('Windows upgraded Agent stores Desktop version AND exact build at first startup',()=>{
+  const fs=require('fs'),path=require('path');
+  const source=fs.readFileSync(path.join(__dirname,'main.js'),'utf8');
+  const start=source.indexOf('else if(upgrade.updated){');
+  const end=source.indexOf("if(process.platform==='darwin')",start);
+  assert(start>0&&end>start);
+  const text=source.slice(start,end);
+  assert.match(text,/agentHandover\.markerData\(app\.getVersion\(\),build\)/);
+  assert.match(text,/build-info\.json/);
+  assert.match(text,/skipHandover=true/);
+});

@@ -25,6 +25,10 @@ def main():
     else:
         venv.EnvBuilder(with_pip=True).create(VENV)
     run('-m', 'pip', 'install', '--disable-pip-version-check', '-r', str(ROOT / 'requirements-build.lock'))
+    # The private shared-core wheel is not published to PyPI yet. Install the
+    # checked-out source into the frozen build environment explicitly.
+    run('-m', 'pip', 'install', '--no-deps', '-e', str(ROOT.parent / 'shared-core'))
+    run('-c', 'import mcptoai_core; from mcptoai_core.persistence import load_receipt_payload')
     if os.name == 'nt':
         # pip-compile on macOS omits Windows-only platform dependencies.
         run('-m', 'pip', 'install', 'pywin32==311')

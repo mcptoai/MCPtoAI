@@ -42,8 +42,8 @@ function Record([string]$Name, [string]$Status, [string]$Detail) {
 }
 
 function Get-AgentProcs([string]$Role) {
-    @(Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('mcptoai-agent.exe','mcptoai-agent-background.exe') } |
-        Where-Object { $_.CommandLine -match ('\b' + $Role + '\b') })
+    @(Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('mcptoai-agent.exe','mcptoai-agent-background.exe') -and
+        $_.ExecutablePath -in @($AgentExe,$BackgroundExe) -and $_.CommandLine -match ('(?i)\s' + [regex]::Escape($Role) + '\s*$') })
 }
 
 # connect'in doğrudan alt süreçlerini ad + alt komut olarak listeler.
@@ -88,7 +88,7 @@ if (Test-Path $DesktopExe) {
 $Sup = @(Get-AgentProcs 'supervise')
 $Con = @(Get-AgentProcs 'connect')
 $SupPid = 0; $ConPid = 0
-if ($Sup.Count -eq 1) { $SupPid = [int]$Sup[0].ProcessId; Record 'single_supervisor' 'pass' "PID $SupPid" }
+if ($Sup.Count -eq 1 -and $Sup[0].ExecutablePath -eq $BackgroundExe) { $SupPid = [int]$Sup[0].ProcessId; Record 'single_supervisor' 'pass' "PID $SupPid" }
 else { Record 'single_supervisor' 'fail' "$($Sup.Count) supervisor süreci" }
 if ($Con.Count -eq 1) {
     $ConPid = [int]$Con[0].ProcessId
@@ -99,7 +99,7 @@ if ($Con.Count -eq 1) {
     $exeTime = (Get-Item $Con[0].ExecutablePath -ErrorAction SilentlyContinue).LastWriteTime
     if ($exeTime -and $Con[0].CreationDate -ge $exeTime) { Record 'agent_not_stale' 'pass' 'agent, agent dosyasından sonra başlamış' }
     else { Record 'agent_not_stale' 'fail' "agent ($($Con[0].CreationDate)) agent dosyasından ($exeTime) önce başlamış" }
-    if ($Con[0].ExecutablePath -in @($AgentExe, $BackgroundExe)) { Record 'agent_path' 'pass' $AgentExe }
+    if ($Con[0].ExecutablePath -eq $BackgroundExe) { Record 'agent_path' 'pass' $BackgroundExe }
     else { Record 'agent_path' 'fail' $Con[0].ExecutablePath }
 } else { Record 'single_connect' 'fail' "$($Con.Count) connect süreci" }
 
@@ -108,15 +108,20 @@ $run = (Get-ItemProperty $RunKey -ErrorAction SilentlyContinue).'MCPtoAI Agent'
 $task = Get-ScheduledTask -TaskName 'MCPtoAI Agent' -ErrorAction SilentlyContinue
 if ($task) {
     $action = @($task.Actions)[0]
-    if ($action.Execute -eq $BackgroundExe -and $action.Arguments -eq 'supervise' -and $task.Settings.MultipleInstances -eq 'IgnoreNew' -and @($task.Triggers | Where-Object { $_.Repetition.Interval -eq 'PT5M' -and -not $_.Repetition.Duration -and $_.StartBoundary }).Count -eq 1 -and -not $run) { Record 'scheduled_supervisor' 'pass' $action.Execute }
-    else { Record 'scheduled_supervisor' 'fail' "Task=$($action.Execute) Args=$($action.Arguments) Run=$run" }
-} elseif ($run -and $run -match 'mcptoai-agent-background\.exe"?\s+supervise\b') { Record 'run_key_supervise' 'warn' "Scheduler unavailable; fallback: $run" }
-else { Record 'run_key_supervise' 'fail' "Run kaydı: '$run'" }
+    $repeating = @($task.Triggers | Where-Object { $_.Repetition.Interval -eq 'PT5M' -and -not $_.Repetition.Duration -and $_.StartBoundary }).Count -gt 0
+    if ($action.Execute -eq $BackgroundExe -and $action.Arguments -eq 'supervise' -and
+        $task.Settings.MultipleInstances -eq 'IgnoreNew' -and $repeating -and -not $run) {
+        Record 'scheduled_supervisor' 'pass' $action.Execute
+    } else { Record 'scheduled_supervisor' 'fail' "Task=$($action.Execute) Args=$($action.Arguments) Run=$run" }
+} else { Record 'scheduled_supervisor' 'fail' 'MCPtoAI Agent Scheduled Task missing' }
 
 if (Test-Path $Marker) {
-    $mv = (Get-Content $Marker -Raw | ConvertFrom-Json).version
-    if ($AppVersion -and $mv -eq $AppVersion) { Record 'handover_marker' 'pass' $mv }
-    else { Record 'handover_marker' 'fail' "marker '$mv', uygulama '$AppVersion'" }
+    $markerInfo = Get-Content $Marker -Raw | ConvertFrom-Json
+    $mv = $markerInfo.version
+    $expectedBuild = if (Test-Path $BuildInfoPath) { (Get-Content $BuildInfoPath -Raw | ConvertFrom-Json).commit } else { '' }
+    if ($AppVersion -and $mv -eq $AppVersion -and $expectedBuild -and $markerInfo.build -eq $expectedBuild) {
+        Record 'handover_marker' 'pass' "$mv build=$expectedBuild"
+    } else { Record 'handover_marker' 'fail' "marker version=$mv build=$($markerInfo.build), expected version=$AppVersion build=$expectedBuild" }
 } else { Record 'handover_marker' 'fail' "marker yok: $Marker" }
 
 # --- 4. MCP alt süreçleri (çoğalma yok) ---------------------------------------

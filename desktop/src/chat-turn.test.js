@@ -24,7 +24,7 @@ function harness() {
     agentExecutable: () => ({ cmd: "mock", prefix: [], cwd: "." }),
     BrowserWindow: { getAllWindows: () => [] },
     rememberApproval() {},
-    require: name => name === "child_process" ? { spawn: () => child } : require(name),
+    require: name => name === "./hidden-child-process" ? { spawn: () => child } : require(name),
   };
   vm.createContext(context);
   vm.runInContext(line + "\nensureDesktopChat();", context);

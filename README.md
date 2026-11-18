@@ -44,7 +44,7 @@ With MCPtoAI you can:
 - choose whether conversation history is stored in MCPtoAI Cloud or only on the selected device;
 - use the web app from another browser or phone while the paired device stays in control of local actions.
 
-> **Available now:** macOS 13+ on Apple silicon, Windows 10+ (x64), Linux CLI 0.2.3 and the official Docker image.
+> **Desktop v0.2.13:** macOS 13+ on Apple silicon and Windows 10+ (x64), with a bundled Device Agent. Linux CLI and Docker are independently versioned at **v0.3.1**. [Desktop v0.2.13 release notes](docs/RELEASE_NOTES_0.2.13.md). Desktop v0.2.11 and v0.2.12 were tagged but not publicly released.
 
 ## Your computer. Your permissions.
 

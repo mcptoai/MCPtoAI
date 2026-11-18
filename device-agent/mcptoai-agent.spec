@@ -8,6 +8,14 @@ if os.path.isfile('mcptoai_agent/build-info.json'):
     datas.append(('mcptoai_agent/build-info.json', 'mcptoai_agent'))
 binaries = []
 hiddenimports = ['keyring.backends.Windows' if sys.platform == 'win32' else 'keyring.backends.macOS'] if sys.platform in ('win32','darwin') else []
+# Explicitly bundle the shared agent primitives; dynamic legacy fallbacks must not
+# silently hide missing modules in a frozen production build.
+tmp_ret = collect_all('mcptoai_core')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+# HEIF codec binaries and dynamically imported parser modules.
+for parser in ('pypdf', 'docx', 'openpyxl', 'pptx', 'odf', 'striprtf', 'pillow_heif', 'defusedxml'):
+    collected = collect_all(parser)
+    datas += collected[0]; binaries += collected[1]; hiddenimports += collected[2]
 tmp_ret = collect_all('keyring')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('fastmcp')

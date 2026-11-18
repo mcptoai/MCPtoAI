@@ -79,3 +79,10 @@ Both agents now use the same pure allowlist to persist only text, done, error,
 resolved approval metadata, and non-actionable interrupted approvals. The
 filesystem locking, atomic writes, retry timers, path ownership and lifecycle
 remain in the platform adapters; no executable approvals are restored.
+
+## Core #40 secure document boundary
+
+`mcptoai_core.documents` provides the versioned device-side attachment API shared
+by Desktop and Linux. See [the Server relay contract](../docs/core-040-document-relay-contract.md)
+for the wire schema, supported formats, quotas, provider mapping and privacy rules.
+Parser dependencies are exactly pinned and hash-locked in `requirements-documents.lock`.

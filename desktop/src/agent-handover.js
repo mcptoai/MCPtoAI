@@ -1,14 +1,16 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const {execFileSync} = require('child_process');
+const {execFileSync} = require('./hidden-child-process');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const markerData = (version,build='') => build ? {version,build} : {version};
 const canonical = p => {try {return fs.realpathSync(p)} catch {return path.resolve(p)}};
 const managed = (candidate, current, platform) => {
   const p = platform === 'win32' ? path.win32 : path;
   const actual = platform === 'win32' ? p.normalize(candidate).toLowerCase() : canonical(candidate), expected = platform === 'win32' ? p.normalize(current).toLowerCase() : canonical(current);
-  if (p.basename(actual).toLowerCase() !== (platform === 'win32' ? 'mcptoai-agent.exe' : 'mcptoai-agent')) return false;
+  if (platform === 'win32' ? !['mcptoai-agent.exe','mcptoai-agent-background.exe'].includes(p.basename(actual).toLowerCase()) : p.basename(actual).toLowerCase() !== 'mcptoai-agent') return false;
   if (actual === expected) return true;
+  if (platform === 'win32') return p.dirname(actual) === p.dirname(expected);
   if (platform === 'darwin' && actual === canonical(path.join(require('os').homedir(),'Applications','MCPtoAI Device Agent.app','Contents','Resources','agent','mcptoai-agent'))) return true;
   const root = platform === 'win32' ? p.dirname(p.dirname(expected)) : path.dirname(path.dirname(path.dirname(path.dirname(path.dirname(expected)))));
   return actual.startsWith(root + p.sep) && actual.includes('MCPtoAI');
@@ -22,13 +24,13 @@ const list = platform => {
     return parseMacPs(execFileSync('ps',['-ww','-axo','pid=,command='],{encoding:'utf8',timeout:8000}));
   }
   if (platform === 'win32') {
-    const script = 'Get-CimInstance Win32_Process -Filter "Name = \'mcptoai-agent.exe\'" | Select-Object ProcessId,ExecutablePath,CommandLine,CreationDate | ConvertTo-Json -Compress';
-    const out = execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',timeout:10000}).trim();
+    const script = String.raw`Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('mcptoai-agent.exe','mcptoai-agent-background.exe') -and $_.CommandLine -match '(?i)\s(connect|supervise)\s*$' } | Select-Object ProcessId,ExecutablePath,CommandLine,CreationDate | ConvertTo-Json -Compress`;
+    const out = execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',timeout:10000,windowsHide:true}).trim();
     return (out ? [JSON.parse(out)].flat() : []).map(x => ({pid:x.ProcessId,exe:x.ExecutablePath,commandLine:x.CommandLine,startedAt:Date.parse(x.CreationDate)})).filter(x => x.exe);
   }
   return [];
 };
-const isConnect = entry => /(?:^|[\s"'])connect(?:[\s"']|$)/.test(String(entry.commandLine||''));
+const isConnect = entry => /(?:^|\s)connect\s*$/i.test(String(entry.commandLine||''));
 const running = pid => {try {process.kill(pid,0);return true} catch(e) {return e.code === 'EPERM'}};
 const stop = async (entry, ops = {}) => {
   const signal = ops.signal || ((pid, sig) => process.kill(pid,sig));
@@ -38,11 +40,11 @@ const stop = async (entry, ops = {}) => {
   return !alive(entry.pid);
 };
 const reconcile = async ({current,platform=process.platform,entries=list(platform),installedAt=fs.statSync(current).mtimeMs,version,inspect,terminate=stop}) => {
-  const installedVersion = version && !inspect ? execFileSync(current,['--version'],{encoding:'utf8',timeout:5000}).match(/mcptoai-agent\s+(\d+\.\d+\.\d+)/)?.[1] : null;
+  const installedVersion = version && !inspect ? execFileSync(current,['--version'],{encoding:'utf8',timeout:5000,windowsHide:true}).match(/mcptoai-agent\s+(\d+\.\d+\.\d+)/)?.[1] : null;
   if(version && !inspect && !installedVersion)return {ok:false,error:'Cannot verify managed agent version'};
   const results=[];
   for(const entry of entries) {
-    if(!managed(entry.exe,current,platform) || entry.pid === process.pid)continue;
+    if(!managed(entry.exe,current,platform) || entry.pid === process.pid || (platform==='win32'&&!isConnect(entry)))continue;
     const info=inspect ? await inspect(entry) : {startedAt: platform==='darwin' ? Date.parse(execFileSync('ps',['-p',String(entry.pid),'-o','lstart='],{encoding:'utf8'}).trim()) : entry.startedAt};
     // A replaced binary retains the same pathname: start-before-install proves staleness.
     const stale=(version && installedVersion && installedVersion!==version) || entry.exe!==current || (Number.isFinite(info.startedAt) && info.startedAt < installedAt - 1000);
@@ -56,7 +58,7 @@ const reconcile = async ({current,platform=process.platform,entries=list(platfor
 // A missing marker is a legacy installation (0.2.5 did not write this marker).
 const handoverOnStartup = async ({current,version,configRoot,platform=process.platform,enumerate=list,terminate=stop,serviceStop,serviceStart,serviceRestart,servicePid,restartVerifyMs=15000,build='',readFile=fs.readFileSync,writeFile=fs.writeFileSync,mkdir=fs.mkdirSync,rename=fs.renameSync,unlink=fs.unlinkSync,probeVersion,log=()=>{}}) => {
   const marker=path.join(configRoot,'desktop-agent-handover.json');
-  const persist=()=>{log('handover marker write attempt '+marker+' version='+version+(build?' build='+build:''));mkdir(configRoot,{recursive:true});const tmp=marker+'.'+process.pid+'.tmp';try{writeFile(tmp,JSON.stringify(build?{version,build}:{version},null,2)+'\n',{mode:0o600});rename(tmp,marker);log('handover marker write success '+marker)}catch(e){try{unlink(tmp)}catch{};log('handover marker write FAILED '+marker+' '+e.message);console.error('Agent handover marker write failed',marker,e);throw e}};
+  const persist=()=>{log('handover marker write attempt '+marker+' version='+version+(build?' build='+build:''));mkdir(configRoot,{recursive:true});const tmp=marker+'.'+process.pid+'.tmp';try{writeFile(tmp,JSON.stringify(markerData(version,build),null,2)+'\n',{mode:0o600});rename(tmp,marker);log('handover marker write success '+marker)}catch(e){try{unlink(tmp)}catch{};log('handover marker write FAILED '+marker+' '+e.message);console.error('Agent handover marker write failed',marker,e);throw e}};
   let previous=null,previousBuild=null;
   try {const m=JSON.parse(readFile(marker,'utf8'));previous=m.version;previousBuild=m.build||null;log('handover marker read '+marker+' version='+previous+(previousBuild?' build='+previousBuild:''))} catch(e) {log('handover marker read failed '+marker+' '+e.message);if(e.code!=='ENOENT')log('handover marker unreadable, probing running agent before any restart')}
   const targets=()=>enumerate(platform).filter(e=>e.pid!==process.pid && managed(e.exe,current,platform) && isConnect(e));
@@ -144,7 +146,7 @@ const handoverOnStartup = async ({current,version,configRoot,platform=process.pl
   persist();
   return {ok:true,changed:true,stopped};
 };
-module.exports={managed,list,parseMacPs,stop,reconcile,handoverOnStartup};
+module.exports={managed,list,parseMacPs,stop,reconcile,handoverOnStartup,markerData};
 
 const stopForInstall = async ({current,platform=process.platform,serviceStop,enumerate=list,terminate=stop}) => {
   const service = await serviceStop();

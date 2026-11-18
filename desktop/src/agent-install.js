@@ -1,5 +1,5 @@
 const fs=require('fs'),path=require('path'),os=require('os'),crypto=require('crypto');
-const {execFileSync}=require('child_process');
+const {execFileSync}=require('./hidden-child-process');
 const LABEL='com.bkty.mcptoai.device-agent';
 function paths(resourcesPath){
   const contents=path.resolve(resourcesPath,'..');
@@ -43,6 +43,61 @@ function install(resourcesPath){
     return {ok:true,agent_app:p.sourceBundle,version:bundledVersion(resourcesPath),sha256:verified.sha256,modern_login_item:true};
   }catch(e){return {ok:false,error:e.message}}
 }
+// Associate legacy launchd background activity with the Desktop bundle.
+// Only a changed plist may cause a reload. launchd bootout completes asynchronously.
+const launchctlGone = ({run,service,timeoutMs=6000,pollMs=150,clock=Date.now,wait=ms=>{const view=new Int32Array(new SharedArrayBuffer(4));Atomics.wait(view,0,0,ms)}}) => {
+  const deadline=clock()+timeoutMs;
+  for (;;) {
+    try {run('/bin/launchctl',['print',service],{encoding:'utf8',timeout:2000})}
+    catch {return true}
+    if(clock()>=deadline)return false;
+    wait(pollMs);
+  }
+};
+function repairLegacyPlist({plist=paths(process.resourcesPath).legacyPlist,run=execFileSync,waitForGone=launchctlGone,wait=ms=>{const view=new Int32Array(new SharedArrayBuffer(4));Atomics.wait(view,0,0,ms)}}={}){
+  if(process.platform!=='darwin'||!fs.existsSync(plist))return {ok:true,changed:false};
+  const key='AssociatedBundleIdentifiers',identifier='com.bkty.mcptoai.desktop';
+  try{
+    const current=JSON.parse(run('/usr/bin/plutil',['-convert','json','-o','-',plist],{encoding:'utf8'}));
+    const unchanged=Array.isArray(current[key])&&current[key].length===1&&current[key][0]===identifier;
+    const service=`gui/${process.getuid()}`,target=`${service}/${LABEL}`;
+    if(unchanged){
+      // A prior failed bootstrap may have left a correct plist but NO service.
+      // Starting an absent service is safe and is not a restart of a running agent.
+      try {run('/bin/launchctl',['print',target],{encoding:'utf8',timeout:2000});return {ok:true,changed:false}}
+      catch {}
+    }
+    if(!unchanged){
+    const updated={...current,[key]:[identifier]};
+    const temp=plist+'.'+process.pid+'.tmp';
+    try{
+      fs.writeFileSync(temp,JSON.stringify(updated),{mode:0o600});
+      run('/usr/bin/plutil',['-convert','xml1','-o',temp,temp]);
+      fs.renameSync(temp,plist);
+    }finally{try{fs.unlinkSync(temp)}catch{}}
+    }
+    let registered=false;
+    try{run('/bin/launchctl',['print',target],{encoding:'utf8',timeout:2000});registered=true}catch{}
+    if(!unchanged&&registered){
+      run('/bin/launchctl',['bootout',target],{timeout:8000});
+      if(!waitForGone({run,service:target}))return {ok:false,changed:!unchanged,error:'LaunchAgent still registered after bootout timeout'};
+    }
+    let error;
+    for(let attempt=1;attempt<=2;attempt++){
+      try {
+        run('/bin/launchctl',['bootstrap',service,plist],{timeout:8000});
+        return {ok:true,changed:!unchanged,reloaded:!unchanged,started:true,attempts:attempt};
+      } catch(e) {
+        error=e;
+        // Do not assume error 5 always means a race: check if launchd did register.
+        try {run('/bin/launchctl',['print',target],{timeout:2000});return {ok:true,changed:!unchanged,reloaded:!unchanged,started:true,attempts:attempt,alreadyRegistered:true}}
+        catch {}
+        if(attempt===1){if(!waitForGone({run,service:target}))return {ok:false,changed:!unchanged,error:'LaunchAgent still registered after bootstrap failure'};wait(250)}
+      }
+    }
+    return {ok:false,changed:!unchanged,error:'LaunchAgent bootstrap failed after two attempts: '+String(error?.stderr||error?.message||error)};
+  }catch(e){return {ok:false,error:e.message,changed:true}}
+}
 function versionParts(v){return String(v||'0').split('.').map(x=>parseInt(x,10)||0)}
 function compareVersions(a,b){const aa=versionParts(a),bb=versionParts(b),n=Math.max(aa.length,bb.length);for(let i=0;i<n;i++){const d=(aa[i]||0)-(bb[i]||0);if(d)return d>0?1:-1}return 0}
 function status(resourcesPath){
@@ -53,4 +108,4 @@ function status(resourcesPath){
   return {installed,bundled,installedHash:bundledHash,expectedHash:expected,integrityMismatch,updateAvailable:!!legacy&&(cmp>0||integrityMismatch),legacyInstalled:!!legacy,modernLoginItem:fs.existsSync(p.sourceBundle)};
 }
 function upgradeIfNeeded(resourcesPath){const s=status(resourcesPath);if(!s.legacyInstalled&&!s.integrityMismatch)return {ok:true,updated:false,...s};const r=install(resourcesPath);return {...r,updated:!!r.ok,installed:r.ok?r.version:s.installed,bundled:s.bundled}}
-module.exports={install,paths,status,bundledVersion,installedVersion,hashTree,compareVersions,upgradeIfNeeded};
+module.exports={install,paths,status,bundledVersion,installedVersion,hashTree,compareVersions,upgradeIfNeeded,repairLegacyPlist,launchctlGone};

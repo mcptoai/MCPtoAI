@@ -1,5 +1,8 @@
 """Outbound WebSocket client for MCPtoAI relay. No inbound port is opened."""
 from __future__ import annotations
+
+from mcptoai_core.documents import DocumentError
+from mcptoai_core.chat_attachments import ChatAttachments
 from .paths import config_dir
 import asyncio
 import sys, collections, json, logging, random, uuid, os, time, hashlib
@@ -49,69 +52,26 @@ STDIO_START_TIMEOUT=120
 STDIO_CLOSE_TIMEOUT=10
 
 
-class _StdioRuntime:
-    """Tek bir stdio MCP sunucusunun yaşam döngüsü.
+from .stdio_runtime import StdioRuntime as _StdioRuntime
 
-    AnyIO cancel scope'ları açıldıkları görevde kapatılmalıdır (aksi halde
-    "Attempted to exit cancel scope in a different task" hatası). Bu yüzden
-    stdio_client ve ClientSession bu sınıfın SAHİP görevinde 'async with' ile
-    açılır ve kapanış da aynı görevde yapılır. Diğer görevler yalnızca hazır
-    oturumu kullanır; araç çağrıları görevden bağımsızdır ve paralel yapılabilir.
-    """
+from mcptoai_core.reconnect import reconnect_delay as _reconnect_delay
 
-    def __init__(self, sid, params, fingerprint):
-        self.sid=sid; self.params=params; self.fingerprint=fingerprint
-        self.session=None
-        self._task=None
-        self._stop=asyncio.Event()
-        self._ready=asyncio.get_running_loop().create_future()
-        # Başlatma zaman aşımına uğrarsa geç gelen hata "never retrieved" uyarısı üretmesin.
-        self._ready.add_done_callback(lambda f: f.cancelled() or f.exception())
+from mcptoai_core.replay import parse_replay_request as _parse_replay_request
+from mcptoai_core.replay import replay_completion as _replay_completion
 
-    @property
-    def alive(self):
-        return self._task is not None and not self._task.done() and self.session is not None
+from mcptoai_core.events import event_envelope as _event_envelope
 
-    async def start(self, timeout=None):
-        self._task=asyncio.create_task(self._own(),name=f"mcp-stdio:{self.sid}")
-        try:
-            if timeout: await asyncio.wait_for(asyncio.shield(self._ready),timeout)
-            else: await asyncio.shield(self._ready)
-        except BaseException:
-            await self.close()
-            raise
-        return self.session
+from mcptoai_core.replay_transport import send_replay_events as _send_replay_events
 
-    async def _own(self):
-        try:
-            async with stdio_client(self.params) as streams:
-                async with ClientSession(*streams) as session:
-                    await session.initialize()
-                    self.session=session
-                    if not self._ready.done(): self._ready.set_result(session)
-                    await self._stop.wait()
-        except asyncio.CancelledError:
-            if not self._ready.done(): self._ready.set_exception(RuntimeError(f"MCP stdio server {self.sid} start was cancelled"))
-            raise
-        except Exception as exc:
-            if not self._ready.done(): self._ready.set_exception(exc)
-            else: logger.warning("MCP stdio server %s stopped: %s",self.sid,exc)
-        finally:
-            self.session=None
+from mcptoai_core.session_state import prune_session_state as _prune_session_state
 
-    async def close(self, timeout=STDIO_CLOSE_TIMEOUT):
-        self._stop.set()
-        task=self._task
-        if task is None or task.done(): return
-        try:
-            await asyncio.wait_for(asyncio.shield(task),timeout)
-        except asyncio.TimeoutError:
-            logger.warning("MCP stdio server %s did not stop in %ss; cancelling its owner task",self.sid,timeout)
-            task.cancel()
-            await asyncio.gather(task,return_exceptions=True)
-        except Exception as exc:
-            logger.debug("MCP stdio server %s close: %s",self.sid,exc)
+from mcptoai_core.relay_transport import (receive_messages as _receive_messages,
+    relay_url as _relay_url, open_relay as _open_relay)
 
+from mcptoai_core.session_state import (expire_idle_sessions as _expire_idle_sessions,
+    evict_session_if_full as _evict_session_if_full,
+    begin_turn as _begin_turn, finish_turn as _finish_turn,
+    turn_is_busy as _turn_is_busy, deactivate_new_turn_on_error as _deactivate_new_turn_on_error)
 
 class RelayClient:
     def __init__(self,cfg:Settings,receipt_store:MessageReceiptStore|None=None):
@@ -119,6 +79,12 @@ class RelayClient:
         # Bağlantı yokken üretilen sohbet olayları (ilerleme, onay isteği, son yanıt) burada
         # bekler ve yeniden bağlanınca sırayla gönderilir; en eskiler taşarsa düşer.
         self._outbox=collections.deque(maxlen=500)
+        # Inbound file transfer state is process-local and never journaled.
+        from .inbound_manager import InboundManager
+        from .inbound_approval import InboundApproval
+        self._inbound = InboundManager(allowed_roots=cfg.allowed_roots)
+        self._inbound_approval = InboundApproval()
+        self._inbound_grants = {}
         # Görev izleyicisi: web'e gönderilen son durumların imzası (yalnızca değişenler gider).
         self._job_sig={}; self._job_watch_task=None
         # Web'e en son bildirilen geçmiş tercihi; Desktop'tan değiştirilince yeniden bildirilir.
@@ -135,6 +101,7 @@ class RelayClient:
         # Durdur: oturum başına çalışan tur görevi ve kullanıcının iptal istediği turlar.
         self._turn_tasks={}
         self._cancel_requested=set()
+        self._chat_attachments=ChatAttachments()
         self._receipts=receipt_store or MessageReceiptStore()
         self._durable_events=EventJournal()
         self._answer_sync_task=None
@@ -198,9 +165,9 @@ class RelayClient:
             try:
                 token=await get_access_token(self.cfg)
                 device_id=await register_device(self.cfg, token)
-                relay_url=self.cfg.relay_url or self.cfg.server_url.replace("https://","wss://").replace("http://","ws://").rstrip("/")+f"/ws/device/{device_id}/"
+                relay_url=_relay_url(self.cfg.relay_url, self.cfg.server_url, device_id)
                 headers={"Authorization":f"Bearer {token}",**device_ws_proof(device_id)}
-                async with websockets.connect(relay_url, additional_headers=headers, ping_interval=20, ping_timeout=20, max_size=2**20) as ws:
+                async with _open_relay(websockets.connect, relay_url, headers) as ws:
                     self.ws=ws; delay=1
                     await self._send_hello()
                     logger.info("Relay connected: %s",relay_url)
@@ -213,15 +180,21 @@ class RelayClient:
                     if self._job_watch_task is None or self._job_watch_task.done():
                         self._job_watch_task=asyncio.create_task(self._watch_jobs())
                     asyncio.create_task(self._send_mcp_state())
-                    async for raw in ws:
-                        await self._handle(json.loads(raw))
+                    try:
+                        await _receive_messages(ws, self._handle)
+                    finally:
+                        self._chat_attachments.close()
+                        await self._interrupt_inbound_uploads()
+                        self.ws=None
             except asyncio.CancelledError: raise
+
             except DeviceRemovedError as exc:
                 self.ws=None
                 logger.error("Device was removed server-side; reconnect loop stopped until explicit re-pair: %s",exc)
                 # Remain idle and generate zero network traffic. Explicit pairing/restart wakes us.
                 await asyncio.Event().wait()
             except websockets.exceptions.ConnectionClosed as exc:
+                await self._interrupt_inbound_uploads()
                 self.ws=None
                 if getattr(exc,"code",None)==4404:
                     try:
@@ -233,18 +206,34 @@ class RelayClient:
                     logger.error("Relay confirmed this device was removed; reconnect loop stopped until explicit re-pair")
                     await asyncio.Event().wait()
                 logger.warning("Relay disconnected: %s",exc)
-                await asyncio.sleep(delay+random.random()); delay=min(delay*2,self.cfg.reconnect_max_seconds)
+                sleep_for,delay=_reconnect_delay(delay,self.cfg.reconnect_max_seconds,random.random())
+                await asyncio.sleep(sleep_for)
             except Exception as exc:
+                await self._interrupt_inbound_uploads()
                 self.ws=None; logger.warning("Relay disconnected: %s",exc)
-                await asyncio.sleep(delay+random.random()); delay=min(delay*2,self.cfg.reconnect_max_seconds)
+                sleep_for,delay=_reconnect_delay(delay,self.cfg.reconnect_max_seconds,random.random())
+                await asyncio.sleep(sleep_for)
     async def _send_hello(self):
-        await self._send({"type":"hello","role":"device","protocol":1,"capabilities":["event_replay_v1","message_dedupe_v1","turn_replay_v1","replay_complete_v1","turn_cancel_v1","activity_settings_v1","activity_metadata_v1","activity_list_v1"],"event_epoch":self._event_epoch})
+        capabilities=["event_replay_v1","message_dedupe_v1","turn_replay_v1","replay_complete_v1","turn_cancel_v1","activity_settings_v1","activity_metadata_v1","activity_list_v1"]
+        # Never advertise on desktop or unattended Linux. Web hides upload for
+        # old agents, absent local TTY or unpaired devices.
+        if ((sys.platform == 'linux' and os.getenv('MCPTOAI_INBOUND_UPLOAD_CLI') == '1')
+                or (sys.platform == 'darwin' and __import__('mcptoai_agent.inbound_approval',fromlist=['desktop_approval_available']).desktop_approval_available())):
+            try:
+                from .inbound_approval import paired_identity
+                paired_identity()
+                if self.cfg.allowed_roots:
+                    capabilities.append('inbound_upload_v1')
+            except (PermissionError, OSError, ValueError):
+                pass
+        capabilities.extend(["document_processing_v1","chat_attachments_v1"])
+        await self._send({"type":"hello","role":"device","protocol":1,"capabilities":capabilities,"upload_workspaces":([str(root.resolve()) for root in self.cfg.allowed_roots] if "inbound_upload_v1" in capabilities else []),"event_epoch":self._event_epoch})
+
     async def _send_event(self,session_id,event,turn_id=None):
         sid=str(session_id or "")
         seq=self._event_seq.get(sid,0)+1; self._event_seq[sid]=seq
-        envelope={"type":"event","session_id":sid,"seq":seq,"event_epoch":self._event_epoch,"event":event,"recorded_at":time.time()}
+        envelope=_event_envelope(sid,seq,self._event_epoch,event,time.time(),turn_id)
         if turn_id is not None:
-            envelope["turn_id"]=turn_id
             turns=self._turn_events.setdefault(sid,collections.OrderedDict())
             turns.setdefault(turn_id,collections.deque(maxlen=500)).append(envelope)
             while len(turns)>2: turns.popitem(last=False)
@@ -256,10 +245,7 @@ class RelayClient:
         except Exception:
             logger.exception("Event journal append failed; relay event continues")
         # Günlük ve tur durumları aynı oturum sınırında budanır.
-        if len(self._event_journal)>50:
-            for old_sid in list(self._event_journal)[:-50]:
-                self._event_journal.pop(old_sid,None); self._event_seq.pop(old_sid,None)
-                self._turn_state.pop(old_sid,None); self._turn_events.pop(old_sid,None)
+        _prune_session_state(self._event_journal,self._event_seq,self._turn_state,self._turn_events)
         if event.get('type') == 'done' and turn_id is not None:
             current_turn = self._turn_events.get(sid, {}).get(turn_id, ())
             if any(e.get('event', {}).get('type') == 'text' for e in current_turn):
@@ -276,10 +262,9 @@ class RelayClient:
         await self._send(envelope)
 
     async def _handle_event_replay_request(self,msg):
-        sid=str(msg.get("session_id") or ""); mode=msg.get("mode") or "after_seq"
-        after=msg.get("after_seq")
-        if not sid or len(sid)>128 or mode not in ("after_seq","active_turn","last_turn"): return
-        if mode=="after_seq" and (not isinstance(after,int) or isinstance(after,bool) or after<0): return
+        parsed=_parse_replay_request(msg, reject_turn_cursor=False)
+        if parsed is None: return
+        sid,mode,after=parsed
         started=time.monotonic(); sent_count=0
         session_hash=hashlib.sha256(sid.encode("utf-8")).hexdigest()[:16]
         # Aynı oturumun önceki replay isteği tamamlanmadan ikinci replay başlatılmaz.
@@ -299,22 +284,16 @@ class RelayClient:
         cursor=after if mode=="after_seq" else 0
         socket=self.ws
         try:
-            while socket is not None and self.ws is socket:
-                source=(self._event_journal.get(sid,()) if mode=="after_seq" else self._turn_events.get(sid,{}).get(turn_id,()))
-                items=[x for x in source if x["seq"]>cursor] if (mode=="after_seq" or turn_id) else []
-                if not items: break
-                for envelope in items:
-                    if self.ws is not socket: return
-                    packet={**envelope,"replay":mode}
-                    try: await socket.send(json.dumps(packet,ensure_ascii=False,default=str))
-                    except Exception: return
-                    cursor=envelope["seq"]; sent_count+=1
-                    await asyncio.sleep(0.125)
+            cursor, replay_sent, completed = await _send_replay_events(
+                socket, lambda: self.ws is socket, mode, cursor, turn_id,
+                self._event_journal, self._turn_events, sid)
+            if not completed: return
+            sent_count += replay_sent
             if self.ws is socket and socket is not None:
                 # turn_active: tur yeniden oynatma bittiği AN hâlâ sürüyor mu (web, Durdur'u buna göre gösterir).
                 state=self._turn_state.get(sid) or {}
                 turn_active=bool(turn_id) and state.get("id")==turn_id and bool(state.get("active"))
-                try: await socket.send(json.dumps({"type":"replay_complete","session_id":sid,"mode":mode,"turn_id":turn_id,"through_seq":cursor,"event_epoch":self._event_epoch,"turn_active":turn_active}))
+                try: await socket.send(json.dumps({**_replay_completion(sid,mode,turn_id,cursor,self._event_epoch),"turn_active":turn_active}))
                 except Exception: return
                 logger.info("replay_complete session_hash=%s mode=%s events_sent=%d duration_ms=%d", session_hash,mode,sent_count,round((time.monotonic()-started)*1000))
         finally:
@@ -327,6 +306,12 @@ class RelayClient:
                 await self.ws.send(data); return
             except Exception as exc:
                 logger.warning("Relay gönderimi başarısız, olay bekletiliyor: %s",exc)
+        # File transfer control frames must NEVER be queued across a reconnect:
+        # they are one-shot and bound to the old authenticated socket/lease.
+        # But a dropped ACK must be observable, not silently misdiagnosed as a
+        # disabled platform capability. The browser will terminate on timeout.
+        if event.get('type') in {'file_ready','file_ack','file_result'}:
+            logger.warning('file_control_not_sent stage=%s transfer_id=%s', event.get('type'),event.get('transfer_id'))
         # Yalnızca sohbet olayları bekletilir; hello/mcp_state bağlantıda yeniden üretilir.
         if event.get("type")=="event": self._outbox.append(data)
     # --- uzun süreli görevler: web'e canlı durum ----------------------------------
@@ -454,14 +439,6 @@ class RelayClient:
                     recorder = getattr(session, '_activity', None)
                     if recorder is not None:
                         recorder.enabled = msg['enabled'] and recording_enabled()
-            elif action == 'clear':
-                if msg.get('confirm') is not True:
-                    raise ValueError('Explicit confirmation required')
-                def clear_local():
-                    store = ActivityStore()
-                    try: return store.clear()
-                    finally: store.close()
-                response['deleted_count'] = await asyncio.to_thread(clear_local)
             elif action != 'status':
                 raise ValueError('Unsupported activity settings action')
             response['enabled'] = self.cfg.user_settings.get('activity_recording_enabled', True) is True and recording_enabled()
@@ -469,8 +446,118 @@ class RelayClient:
             response['error'] = type(exc).__name__
         await self._send(response)
 
+    async def _interrupt_inbound_uploads(self):
+        """Record metadata-only interruption events before removing local transfer state."""
+        for tid, session in list(self._inbound._sessions.items()):
+            try:
+                await session.record_activity('interrupted')
+            except Exception:
+                logger.warning('Unable to record interrupted inbound transfer id=%s', tid)
+            logger.info('Inbound transfer id=%s decision=interrupted', tid)
+        self._inbound.disconnect()
+        self._inbound_grants.clear()
+
+    async def _handle_inbound_upload(self, msg):
+        """Linux interactive-only receive path; Electron remains fail closed."""
+        import base64
+        import re
+        from .inbound_approval import local_cli_prompt, local_headless_prompt, local_desktop_prompt, desktop_socket_path
+        from .inbound_transfer import validate_destination
+        tid = msg.get('transfer_id')
+        if not isinstance(tid, str) or not re.fullmatch(r'[a-f0-9-]{36}', tid):
+            return
+        kind = msg.get('type')
+        # Off by default; an unattended agent cannot grant a remote write.
+        enabled = ((sys.platform == 'linux' and os.getenv('MCPTOAI_INBOUND_UPLOAD_CLI') == '1')
+                   or (sys.platform == 'darwin' and __import__('mcptoai_agent.inbound_approval',fromlist=['desktop_approval_available']).desktop_approval_available()))
+        if kind == 'file_offer' and not enabled:
+            await self._send({'type':'file_ready','transfer_id':tid,'status':'denied','reason':'desktop_unavailable'})
+            return
+        if not enabled:
+            return
+        phase = {'file_offer':'offer','file_chunk':'chunk','file_finish':'finish','file_cancel':'cancel'}.get(kind,'unknown')
+        try:
+            if kind == 'file_offer':
+                session = self._inbound.offer(transfer_id=tid,name=msg['name'],
+                    size=msg['size'],sha256=msg['sha256'],workspace=msg['workspace'],rename_if_exists=msg.get('rename_if_exists') is True)
+                await session.record_activity('requested')
+                await session.record_activity('approval_pending')
+                try:
+                    grant = await asyncio.wait_for(asyncio.to_thread(
+                        self._inbound_approval.request, session,
+                        prompt=(lambda request, preview: local_headless_prompt(request,preview,transfer_id=tid)
+                                if sys.platform == 'linux' else
+                                local_desktop_prompt(request,preview,transfer_id=tid))),timeout=60)
+                except (PermissionError, asyncio.TimeoutError):
+                    await session.record_activity('denied')
+                    self._inbound.cancel(tid)
+                    await self._send({'type':'file_ready','transfer_id':tid,'status':'denied','reason':'approval_denied'})
+                    return
+                self._inbound_grants[tid] = grant
+                await session.record_activity('approved')
+                await self._send({'type':'file_ready','transfer_id':tid,'status':'ready'})
+            elif kind == 'file_chunk':
+                session = self._inbound.get(tid)
+                index = await asyncio.to_thread(session.chunk,index=msg['index'],data=msg['data'])
+                if index == 0:
+                    await session.record_activity('started')
+                await self._send({'type':'file_ack','transfer_id':tid,'index':index})
+            elif kind == 'file_finish':
+                session = self._inbound.get(tid)
+                grant = self._inbound_grants.pop(tid)
+                # Revalidate workspace against the *current* allowed root set.
+                target = validate_destination(session.target.name,str(session.target.parent),self.cfg.allowed_roots)
+                await asyncio.to_thread(session.finish,consume_grant=lambda: self._inbound_approval.consume(session,grant),
+                                        revalidate_destination=lambda: target)
+                await session.record_activity('completed')
+                self._inbound.cancel(tid)
+                await self._send({'type':'file_result','transfer_id':tid,'status':'completed','path':str(target),'sha256':session.staging.sha256})
+            elif kind == 'file_cancel':
+                session = self._inbound.get(tid)
+                await session.record_activity('cancelled')
+                self._inbound_grants.pop(tid,None)
+                self._inbound.cancel(tid)
+        except (ValueError, TypeError, KeyError, PermissionError, FileExistsError, OSError) as exc:
+            from .inbound_transfer import DestinationExistsError
+            failure_stage = getattr(exc, 'stage', phase)
+            path_kind = getattr(exc, 'kind', 'parent' if isinstance(exc, (NotADirectoryError, FileNotFoundError)) else 'unknown')
+            logger.warning('Inbound upload rejected: %s phase=%s stage=%s path_kind=%s',
+                           type(exc).__name__, phase, failure_stage, path_kind)
+            try:
+                session = self._inbound.get(tid)
+                await session.record_activity('failed')
+            except PermissionError:
+                pass
+            self._inbound_grants.pop(tid,None)
+            self._inbound.cancel(tid)
+            await self._send({'type':'file_result','transfer_id':tid,'status':'failed','ok':False,'reason':('invalid_workspace' if isinstance(exc,(FileNotFoundError,PermissionError)) else 'file_exists' if isinstance(exc,FileExistsError) else 'invalid_size' if isinstance(exc,ValueError) and 'size' in str(exc).lower() else 'device_error')})
+
     async def _handle(self,msg):
         typ=msg.get("type")
+        if typ in {"file_offer", "file_chunk", "file_finish", "file_cancel"}:
+            tid = msg.get('transfer_id')
+            chat = getattr(self, '_chat_attachments', None)
+            inbound = getattr(self, '_inbound', None)
+            # Offers select a transfer owner; follow-up frames MUST route only to
+            # an already-owned transfer_id, never to an unrelated receiver.
+            if typ == 'file_offer':
+                if msg.get('purpose') == 'chat':
+                    if chat is not None:
+                        response = await chat.handle(msg)
+                        if response is not None: await self._send(response)
+                elif chat is None or not isinstance(tid, str) or tid not in chat.entries:
+                    # The inbound offer registers its ID before file_ready; this
+                    # asynchronous approval must not block the relay receive loop.
+                    asyncio.create_task(self._handle_inbound_upload(msg))
+            elif chat is not None and isinstance(tid, str) and tid in chat.entries:
+                response = await chat.handle(msg)
+                if response is not None: await self._send(response)
+            elif inbound is not None and isinstance(tid, str) and inbound.owns(tid):
+                await self._handle_inbound_upload(msg)
+            # Unknown/expired transfer IDs are unowned: SILENTLY ignore them.
+            # No file bytes or transfer frames enter chat journals/outbox.
+            return
+
         if typ=="hello": asyncio.create_task(self._send_hello()); return
         if typ=="message": asyncio.create_task(self._run_message(msg)); return
         if typ=="event_replay_request": asyncio.create_task(self._handle_event_replay_request(msg)); return
@@ -817,9 +904,7 @@ class RelayClient:
             stale=_is_stale_bundle_error(exc)
             logger.exception("Message turn failed unexpectedly%s"," (agent files were replaced while running)" if stale else "")
             # Bu çağrının başlattığı tur aktif kalırsa sohbet kalıcı olarak "turn_in_progress" verir.
-            state=self._turn_state.get(sid)
-            if state is not None and state is not before and state.get("active"):
-                state["active"]=False
+            _deactivate_new_turn_on_error(self._turn_state, sid, before)
             if sid and len(sid)<=128:
                 message=("MCPtoAI was updated while the device agent was running. The agent is restarting; send your message again in a few seconds."
                          if stale else "The device agent hit an unexpected error. Please try again.")
@@ -857,11 +942,11 @@ class RelayClient:
         sid=str(msg.get("session_id") or str(uuid.uuid4()))
         if len(sid)>128: return
         text=str(msg.get("message") or "").strip()
+        if not text and (msg.get("attachments") is not None or "attachment_ids" in msg): text="Please review the attached files."
         if not text or len(text.encode("utf-8"))>256*1024: return
         # Yeni tur, mevcut tur bitmeden makbuzlanmaz.
-        active=self._turn_state.get(sid)
         incoming_id=str(msg.get("message_id") or "").strip()
-        if active and active["active"] and incoming_id!=active["id"]:
+        if _turn_is_busy(self._turn_state, sid, incoming_id):
             await self._send_event(sid,{"type":"error","code":"turn_in_progress","message":"A turn is already running in this conversation. Wait for it to finish or stop it first."})
             return
         requested_provider=str(msg.get("provider") or self.cfg.provider).strip()
@@ -895,20 +980,21 @@ class RelayClient:
         logger.info("Selected provider/model for session %s: %s/%s", sid, requested_provider, requested_model)
         # Bound long-lived agent memory: expire idle sessions and cap the cache.
         now=time.monotonic()
-        for key,last in list(self._session_last_used.items()):
-            if now-last>3600:
-                self.sessions.pop(key,None); self._session_last_used.pop(key,None)
+        _expire_idle_sessions(self.sessions, self._session_last_used, now)
         # Anahtar parmak izi: Desktop anahtarı değiştirirse uzun ömürlü süreç eski anahtarlı oturumu kullanmaz.
         from .secret_store import provider_key_fingerprint
         session_key=f"{sid}:{requested_provider}:{requested_model}:{provider_key_fingerprint(requested_provider)}"
         session=self.sessions.get(session_key)
-        if session is None and len(self.sessions)>=50:
-            oldest=min(self._session_last_used,key=self._session_last_used.get)
-            self.sessions.pop(oldest,None); self._session_last_used.pop(oldest,None)
+        _evict_session_if_full(self.sessions, self._session_last_used, session is not None)
         if session is None:
             provider=(make_provider(provider_cfg,siwc_origin="web-relay",siwc_user_initiated=True,siwc_web_authorized=True) if siwc_web_authorized else make_provider(provider_cfg))
             provider.model=requested_model
             session=self.sessions[session_key]=AgentSession(provider_cfg,provider,build_server(provider_cfg, artifact_session_id=sid),policy=ToolPolicy(rules={**load_rules(),**{name:Decision((self._remote_tool_map[name][0].get("tools") or {}).get(self._remote_tool_map[name][1],"confirm")) for name in self._remote_tool_specs}}),remote_tools=list(self._remote_tool_specs.values()),remote_caller=self._call_remote_tool,server_aliases=self._server_aliases())
+            from .session_context import inherit_model_context
+            inherit_model_context(session, self.sessions, self._session_last_used,
+                                  session_key=session_key, sid=sid,
+                                  provider=requested_provider,
+                                  fingerprint=provider_key_fingerprint(requested_provider))
             session.activity_session_id=sid
             session.activity_provider=requested_provider
         self._session_last_used[session_key]=now
@@ -942,9 +1028,8 @@ class RelayClient:
                     await self._send_event(sid,{"type":"error","message":"This request was already processed on the device and will not be run again. Its previous result is no longer available in the replay buffer."})
                 return
         turn_id=message_id or str(uuid.uuid4())
-        self._turn_state[sid]={"id":turn_id,"active":True}
+        _begin_turn(self._turn_state, self._turn_events, sid, turn_id)
         self._turn_tasks[sid]=(turn_id,asyncio.current_task())
-        self._turn_events.setdefault(sid,collections.OrderedDict()).setdefault(turn_id,collections.deque(maxlen=500))
         async def emit(event): await self._send_event(sid,event,turn_id=turn_id)
         async def approver(tool,args):
             aid=str(uuid.uuid4()); fut=asyncio.get_running_loop().create_future(); self.pending_approvals[aid]=(fut,sid)
@@ -968,9 +1053,31 @@ class RelayClient:
                 self.pending_approvals.pop(aid,None)
                 await self._send_event(sid,{"type":"approval_resolved","approval_id":aid,"status":outcome},turn_id=turn_id)
         capability=str(msg.get("capability") or "").strip().casefold()
+        attachments = None
         try:
+            if msg.get("attachments") is not None:
+                raise DocumentError("invalid_attachments", "Inline relay attachments are unsupported. Use file transfers.")
+            if "attachment_ids" in msg:
+                if self.ws is None:
+                    raise DocumentError("invalid_attachments", "Attachment connection was lost. Files were not sent to the model.")
+                attachments = self._chat_attachments.consume(msg["attachment_ids"], sid, message_id)
+            if capability and attachments is not None: raise DocumentError("unsupported_route", "Attachments are supported only in chat turns.")
             if capability: await session.run_capability(capability,text,approver,emit)
-            else: await session.run(text,approver,emit,images=images,language=msg.get("language"),context=context,preferred_mcp_server_ids=preferred)
+            else:
+                async def timing_sink(snapshot):
+                    from .turn_timing import PHASES
+                    import uuid as _uuid
+                    try:
+                        correlation_id = str(_uuid.UUID(snapshot['correlation_id']))
+                        phases = snapshot['phases_ms']
+                        if set(phases) != set(PHASES) or any(v is not None and (type(v) is not int or v < 0) for v in phases.values()):
+                            return
+                        await emit({'type':'turn_timing','correlation_id':correlation_id,
+                                    'phases_ms':{key:phases[key] for key in PHASES},
+                                    'unknown_phases':[key for key in PHASES if phases[key] is None]})
+                    except (KeyError, TypeError, ValueError, AttributeError):
+                        logger.warning('Invalid turn timing snapshot discarded')
+                await session.run(text,approver,emit,images=images,language=msg.get("language"),context=context,preferred_mcp_server_ids=preferred,attachments=attachments,timing_sink=timing_sink)
         except asyncio.CancelledError:
             if turn_id not in self._cancel_requested: raise
             # Kullanıcı durdurdu: hata değil, düzenli bir son. Görevin iptal sayacı sıfırlanır.
@@ -979,16 +1086,24 @@ class RelayClient:
             logger.info("Turn %s stopped by the user",turn_id)
             await emit({"type":"cancelled","status":"cancelled","message":"Stopped. Actions that already completed are not undone."})
             if message_id: self._receipts.finish(message_id,"cancelled")
+        except DocumentError as exc:
+            await emit({"type":"error","code":exc.code,"message":str(exc)})
+            if message_id: self._receipts.finish(message_id,"failed")
         except Exception as exc:
-            logger.exception("Agent session failed")
+            from .context_errors import ContextBudgetError, friendly_context_error
+            if isinstance(exc, ContextBudgetError):
+                await emit({'type':'error','code':'context_budget_exceeded',
+                            'message':friendly_context_error(msg.get('language'))})
+                if message_id: self._receipts.finish(message_id,'failed')
+                return
+            if attachments is None: logger.exception("Agent session failed")
             from .provider_errors import friendly_provider_error
-            await emit({"type":"error","message":friendly_provider_error(str(msg.get("provider") or self.cfg.provider),exc,getattr(self.cfg,"custom_providers",None))})
+            await emit({"type":"error","message":("The provider could not process the attached files. Receipt by the model is not confirmed." if attachments is not None else friendly_provider_error(str(msg.get("provider") or self.cfg.provider),exc,getattr(self.cfg,"custom_providers",None)))})
             if message_id: self._receipts.finish(message_id,"failed")
         else:
             if message_id: self._receipts.finish(message_id,"completed")
         finally:
-            if self._turn_state.get(sid,{}).get("id")==turn_id:
-                self._turn_state[sid]["active"]=False
+            _finish_turn(self._turn_state, sid, turn_id)
             if self._turn_tasks.get(sid,(None,))[0]==turn_id:
                 self._turn_tasks.pop(sid,None)
             self._cancel_requested.discard(turn_id)

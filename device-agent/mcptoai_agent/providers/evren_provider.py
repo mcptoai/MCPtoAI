@@ -32,7 +32,7 @@ class EvrenProvider(OpenAIProvider):
             extra = getattr(m, "model_extra", {}) or {}
             task = extra.get("task")
             if task in {"chat", "vision_chat"}:
-                out.append({"id": m.id, "task": task, "modalities": extra.get("modalities") or ["text"]})
+                out.append({"id": m.id, "task": task, "modalities": extra.get("modalities") or (["text", "image"] if task == "vision_chat" else ["text"])})
         self._models_cache, self._models_cache_at = out, time.monotonic()
         return out
 

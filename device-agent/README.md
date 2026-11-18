@@ -35,3 +35,11 @@ MCPtoAI needs one Auth0 API with Identifier `https://api.mcptoai.com` and RS256 
 - The desktop agent makes the outbound relay connection; users do not expose an inbound server.
 - Tool permissions are enforced locally. Dangerous operations require approval.
 - End-to-end payload encryption/device signing is a separate hardening step and must not be claimed until implemented.
+
+### Incoming file origin marking
+
+Accepted inbound files receive `com.apple.quarantine` on macOS and the
+`Zone.Identifier` alternate data stream (`ZoneId=3`) on Windows. If marking
+fails, the new file is removed and the transfer fails closed. Linux does not
+receive an origin mark: there is no universal Linux equivalent of these
+platform-specific metadata formats. This does not replace content validation.

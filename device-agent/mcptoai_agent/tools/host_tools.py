@@ -8,6 +8,7 @@ Kaynak: uhm-mac-app/server.py. Farklar:
 """
 
 from __future__ import annotations
+from ..process_spawn import run, create_subprocess_exec, create_subprocess_shell
 
 import inspect
 import asyncio
@@ -81,7 +82,7 @@ def build_server(cfg: Settings, *, artifact_session_id: str | None = None) -> Fa
         timeout = max(1, min(int(timeout or cfg.default_cmd_timeout), cfg.max_cmd_timeout))
         try:
             # stdin kapalı: alt süreç agent'ın girdisini (Desktop'ın onay/iptal kanalı) devralmasın.
-            result = subprocess.run(
+            result = run(
                 args, shell=shell, cwd=cwd, capture_output=True, text=True,
                 timeout=timeout, errors="replace", stdin=subprocess.DEVNULL, env=_command_env(),
             )
@@ -98,7 +99,7 @@ def build_server(cfg: Settings, *, artifact_session_id: str | None = None) -> Fa
         if os.name == "nt":
             if proc.returncode is None:
                 try:
-                    k = await asyncio.create_subprocess_exec(
+                    k = await create_subprocess_exec(
                         "taskkill", "/PID", str(proc.pid), "/T", "/F",
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     await asyncio.wait_for(k.wait(), 10)
@@ -144,7 +145,7 @@ def build_server(cfg: Settings, *, artifact_session_id: str | None = None) -> Fa
             kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             kwargs["start_new_session"] = True
-        proc = await asyncio.create_subprocess_shell(command, **kwargs)
+        proc = await create_subprocess_shell(command, **kwargs)
         buf = bytearray()
         limit = max(cfg.max_output_chars * 4, 65536)  # bellek sınırı; fazlası okunup atılır
 
@@ -158,15 +159,30 @@ def build_server(cfg: Settings, *, artifact_session_id: str | None = None) -> Fa
 
         # Çıktı, subprocess(text=True) ile aynı kodlamayla çözülür (Windows'ta yerel kod sayfası).
         encoding = locale.getpreferredencoding(False)
-        try:
-            await asyncio.wait_for(asyncio.gather(drain(), proc.wait()), timeout)
-        except asyncio.TimeoutError:
+        drain_task = asyncio.create_task(drain())
+        wait_task = asyncio.create_task(proc.wait())
+
+        async def finish_cancelled_process():
+            # Cancellation must not abandon the stdout pipe; otherwise its transport
+            # may leave BaseSubprocessTransport.__del__ running after
+            # the event loop has closed. Reap the shell and drain its pipe.
             await _kill_tree(proc)
+            try:
+                await asyncio.wait_for(asyncio.shield(drain_task), 2)
+            except asyncio.TimeoutError:
+                drain_task.cancel()
+                await asyncio.gather(drain_task, return_exceptions=True)
+            await asyncio.gather(wait_task, return_exceptions=True)
+
+        try:
+            await asyncio.wait_for(asyncio.shield(asyncio.gather(drain_task, wait_task)), timeout)
+        except asyncio.TimeoutError:
+            await finish_cancelled_process()
             out = buf.decode(encoding, errors="replace").strip()
             return _truncate(f"[ERROR] {timeout} sn sonra zaman aşımı; komut ve alt süreçleri durduruldu\n{out}".strip())
         except asyncio.CancelledError:
             # Durdur: iptal devam ederken bile süreç ağacının öldürülmesi tamamlanmalı.
-            await asyncio.shield(_kill_tree(proc))
+            await asyncio.shield(finish_cancelled_process())
             raise
         output = buf.decode(encoding, errors="replace").strip() or "(çıktı yok)"
         prefix = f"[exit={proc.returncode}]\n" if proc.returncode else ""
@@ -306,33 +322,36 @@ def build_server(cfg: Settings, *, artifact_session_id: str | None = None) -> Fa
         target.write_text(content)
         return f"Yazıldı: {target} ({len(content)} karakter)"
 
-    @mcp.tool(description="Recursively find files matching a glob pattern under a root, largest first.")
+    @mcp.tool(description="Search within an approved root (at most 10 seconds, 200 matches, six directory levels); partial results explicitly marked.")
     @safe_tool
-    def find_files(root: str, pattern: str = "*", limit: int = 200) -> str:
-        """Recursively find files matching a glob pattern under a root, largest first."""
+    def find_files(root: str, pattern: str = "*", limit: int = 200, max_depth: int = 6) -> str:
+        """Bounded filesystem search, returns partial results if any bound is hit."""
+        from .bounded_find import find_bounded
         base = _safe_path(root, must_exist=True)
-        # Alt dizinleri tek tek kontrol et; sır dizinlerinin içine hiç girme.
-        hits = []
-        skipped = 0
-        for current, folders, filenames in os.walk(base, followlinks=False):
-            for folder in list(folders):
-                try:
-                    check_path((Path(current) / folder).resolve(strict=False), write=False)
-                except (PermissionError, OSError):
-                    folders.remove(folder)
-                    skipped += 1
-            for filename in filenames:
-                candidate = Path(current) / filename
-                try:
-                    check_path(candidate.resolve(strict=False), write=False)
-                    if candidate.is_file() and candidate.match(pattern):
-                        hits.append(candidate)
-                except (PermissionError, OSError):
-                    skipped += 1
-        hits.sort(key=lambda p: p.stat().st_size, reverse=True)
-        lines = [f"{p.stat().st_size:>12} {p}" for p in hits[: max(1, min(limit, 1000))]]
-        lines.append(f"{skipped} protected paths skipped")
-        return _truncate("\n".join(lines))
+        return _truncate(find_bounded(base, pattern, check_path=check_path,
+                                      limit=limit, max_depth=max_depth))
+
+    @mcp.tool(description="Preview a bounded local image resize, crop or conversion without writing a file. Strips metadata; returns a small JPEG preview data URL.")
+    @safe_tool
+    def image_preview(source: str, operation: str, width: int = 0, height: int = 0,
+                      left: int = 0, top: int = 0, right: int = 0, bottom: int = 0,
+                      output_format: str = "PNG", background: str = "#ffffff") -> str:
+        from ..image_processing import preview
+        return json.dumps(preview(source, cfg.allowed_roots, operation, width=width, height=height,
+                                  left=left, top=top, right=right, bottom=bottom,
+                                  output_format=output_format, background=background))
+
+    @mcp.tool(description="Save a locally transformed image. Requires explicit user approval; overwrite requires separate confirmation. Strips EXIF/GPS metadata.")
+    @safe_tool
+    def image_save(source: str, destination: str, operation: str, overwrite: bool = False,
+                   width: int = 0, height: int = 0, left: int = 0, top: int = 0,
+                   right: int = 0, bottom: int = 0, output_format: str = "PNG",
+                   background: str = "#ffffff") -> str:
+        from ..image_processing import save
+        return json.dumps(save(source, destination, cfg.allowed_roots, operation,
+                               overwrite=overwrite, width=width, height=height,
+                               left=left, top=top, right=right, bottom=bottom,
+                               output_format=output_format, background=background))
 
     # --- sistem araçları --------------------------------------------------
     @mcp.tool(description="Show disk usage for the configured roots using portable Python APIs.")
