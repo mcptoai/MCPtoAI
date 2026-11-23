@@ -24,6 +24,8 @@ jobs:
         with:
           fetch-depth: 0
       - name: Require signed annotated release tag, then checkout exact source
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           tag="refs/tags/v$RELEASE_VERSION"
