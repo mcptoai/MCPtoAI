@@ -1,4 +1,4 @@
-name: Publish GitHub Release
+name: Publish GitHub Release (manual approval only)
 
 on:
   workflow_dispatch:
@@ -7,9 +7,6 @@ on:
         description: 'Version without v prefix (e.g. 0.1.18)'
         required: true
         type: string
-  push:
-    tags:
-      - 'v*'
 
 permissions:
   contents: write
@@ -38,6 +35,7 @@ jobs:
             version="${INPUT_VERSION}"
           fi
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid version"; exit 1; }
+          [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == "v$version" ]] || { echo "Manually dispatch using the approved v$version tag ref, not a branch"; exit 1; }
           python3 - "$version" <<'PY'
           import json, pathlib, re, sys
           version = sys.argv[1]
@@ -56,17 +54,14 @@ jobs:
           version="$RELEASE_VERSION"
           curl -fsSI "https://api.mcptoai.com/releases/macos/MCPtoAI-$version-arm64.dmg?release=$version" >/dev/null
           curl -fsSI "https://api.mcptoai.com/releases/windows/MCPtoAI-$version-x64-Setup.exe" >/dev/null
-      - name: Create tag for manual release
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Require an existing signed annotated tag
         run: |
           set -euo pipefail
           git fetch --tags
-          if git rev-parse -q --verify "refs/tags/v$RELEASE_VERSION" >/dev/null; then
-            echo "Tag already exists"; exit 1
-          fi
-          gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/v$RELEASE_VERSION" -f sha="${GITHUB_SHA}"
+          tag="refs/tags/v$RELEASE_VERSION"
+          [[ "$(git cat-file -t "$tag")" == tag ]] || { echo "Existing signed annotated tag required"; exit 1; }
+          git cat-file -p "$tag" | grep -q -- '-----BEGIN SSH SIGNATURE-----' || { echo "Signed SSH tag required"; exit 1; }
+          echo "Approved tag $tag points to $(git rev-parse "$tag^{}")"
       - name: Check for existing GitHub Release
         id: existing_release
         env:
@@ -80,22 +75,32 @@ jobs:
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Publish GitHub Release
+      - name: Publish GitHub Release with verified binaries (explicit dispatch only)
         if: steps.existing_release.outputs.exists != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version="$RELEASE_VERSION"
-          cat > release-notes.md <<EOF
-          MCPtoAI Desktop $version — macOS and Windows.
-
-          ### Downloads
-          - [macOS Apple Silicon DMG](https://api.mcptoai.com/releases/macos/MCPtoAI-$version-arm64.dmg?release=$version)
-          - [Windows x64 installer](https://api.mcptoai.com/releases/windows/MCPtoAI-$version-x64-Setup.exe)
-          - [Linux CLI on PyPI (independent version)](https://pypi.org/project/mcptoai/)
-          - [Official Docker images (independent version)](https://github.com/mcptoai/MCPtoAI/pkgs/container/mcptoai)
-
-          See [Downloads](https://mcptoai.com/downloads/) for current installation instructions.
-          EOF
-          gh release create "v$version" --repo "$GITHUB_REPOSITORY" --title "MCPtoAI v$version" --notes-file release-notes.md --latest --verify-tag
+          mkdir -p release-assets
+          mac="MCPtoAI-$version-arm64.dmg"
+          win="MCPtoAI-$version-x64-Setup.exe"
+          curl -fL --retry 3 --max-time 360 -o "release-assets/$mac" "https://api.mcptoai.com/releases/macos/$mac?release=$version"
+          curl -fL --retry 3 --max-time 360 -o "release-assets/$win" "https://api.mcptoai.com/releases/windows/$win?release=$version"
+          python3 - <<'PYCHECK'
+          import hashlib,os,pathlib,re,sys
+          version=os.environ['RELEASE_VERSION']
+          notes=pathlib.Path(f'docs/RELEASE_NOTES_{version}.md').read_text()
+          for name in (f'MCPtoAI-{version}-arm64.dmg',f'MCPtoAI-{version}-x64-Setup.exe'):
+              match=re.search(r'`'+re.escape(name)+r'`\s*\|\s*`([a-f0-9]{64})`',notes)
+              if not match: sys.exit(f'Approved checksum missing: {name}')
+              with open('release-assets/'+name,'rb') as file:
+                  digest=hashlib.file_digest(file,'sha256').hexdigest()
+              if digest!=match.group(1): sys.exit(f'Hash mismatch: {name}')
+              print('VERIFIED',name,digest)
+          PYCHECK
+          (cd release-assets && sha256sum "$mac" "$win" > SHA256SUMS)
+          cp "docs/RELEASE_NOTES_${version}.md" release-notes.md
+          gh release create "v$version" "release-assets/$mac" "release-assets/$win" release-assets/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --title "MCPtoAI v$version" \
+            --notes-file release-notes.md --latest --verify-tag

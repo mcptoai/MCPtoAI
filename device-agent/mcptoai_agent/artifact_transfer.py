@@ -15,6 +15,7 @@ import httpx
 
 from .auth import _auth_bundle, get_access_token
 from .config import Settings
+from .workspace_policy import within_allowed_roots
 
 CHUNK_SIZE = 4 * 1024 * 1024
 MAX_ARTIFACT_SIZE = 1024 * 1024 * 1024
@@ -22,7 +23,7 @@ MAX_ARTIFACT_SIZE = 1024 * 1024 * 1024
 
 async def upload_artifact(cfg: Settings, file_path: Path, *, session_id: str | None = None) -> dict:
     root = file_path.resolve(strict=True)
-    if not any(root == base or root.is_relative_to(base) for base in cfg.allowed_roots):
+    if not within_allowed_roots(root, cfg.allowed_roots):
         raise PermissionError("Artifact is outside the allowed workspace")
     if not root.is_file() or not 0 < root.stat().st_size <= MAX_ARTIFACT_SIZE:
         raise ValueError("Artifact must be a regular file between 1 byte and 1 GiB")

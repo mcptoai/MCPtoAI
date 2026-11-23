@@ -8,6 +8,8 @@ from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from .workspace_policy import within_allowed_roots
+
 MAX_SOURCE_BYTES = 25 * 1024 * 1024
 MAX_PIXELS = 24_000_000
 MAX_OUTPUT_BYTES = 25 * 1024 * 1024
@@ -17,7 +19,7 @@ FORMATS = {'PNG': '.png', 'JPEG': '.jpg', 'WEBP': '.webp'}
 
 def _inside(path: str, roots: list[Path]) -> Path:
     p = Path(path).expanduser().resolve(strict=False)
-    if not any(p == root.resolve() or p.is_relative_to(root.resolve()) for root in roots):
+    if not within_allowed_roots(p, roots):
         raise PermissionError('Path outside allowed roots')
     return p
 

@@ -65,7 +65,21 @@ def _roots() -> list[Path]:
         p=Path(chosen).expanduser().resolve()
         # A configured workspace must fail closed if it disappears. Falling
         # back to broader legacy roots would silently expand filesystem access.
-        return [p] if p.exists() and p.is_dir() else []
+        if not (p.exists() and p.is_dir()):
+            return []
+        roots=[p]
+        if os.name == 'nt':
+            from .windows_known_folders import default_windows_roots
+            # A selected parent already grants authority over these children.
+            # Advertising its actual redirected known folders as *additional*
+            # exact roots does not expand the approved filesystem boundary.
+            for known in default_windows_roots():
+                if known != p and known.is_relative_to(p):
+                    roots.append(known)
+        return roots
+    if os.name == 'nt':
+        from .windows_known_folders import default_windows_roots
+        return default_windows_roots()
     home=Path.home()
     return [(home/n).resolve() for n in ("Desktop","Documents","Downloads")]
 
