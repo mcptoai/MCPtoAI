@@ -5,6 +5,8 @@ has been consumed for the exact authenticated principal/device/target/digest.
 """
 from __future__ import annotations
 
+from .workspace_policy import within_allowed_roots
+
 import hashlib
 import os
 from pathlib import Path
@@ -16,9 +18,10 @@ import ctypes
 import zipfile
 import unicodedata
 
-MAX_FILE_BYTES = 10 * 1024 * 1024
+MAX_FILE_BYTES = 50 * 1024 * 1024
+MAX_CHAT_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_CHUNK_BYTES = 128 * 1024
-ALLOWED_SUFFIXES = frozenset({'.txt', '.md', '.csv', '.json', '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.docx', '.xlsx'})
+ALLOWED_SUFFIXES = frozenset({'.txt', '.md', '.csv', '.json', '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.heic', '.heif', '.docx', '.xlsx'})
 SAFE_NAME = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_. ()-]{0,119}$')
 
 
@@ -35,7 +38,7 @@ def validate_destination(name: str, workspace: str, allowed_roots: list[Path]) -
     if Path(name).suffix.lower() not in ALLOWED_SUFFIXES:
         raise ValueError('Unsupported file type')
     root = Path(workspace).resolve(strict=True)
-    if not root.is_dir() or not any(root == Path(base).resolve(strict=False) or root.is_relative_to(Path(base).resolve(strict=False)) for base in allowed_roots):
+    if not root.is_dir() or not within_allowed_roots(root, allowed_roots):
         raise PermissionError('Destination is outside allowed workspace roots')
     target = root / name
     if target.is_symlink():
@@ -63,6 +66,60 @@ def available_destination(name: str, workspace: str, allowed_roots: list[Path], 
         except DestinationExistsError:
             continue
     raise DestinationExistsError('target', 'unique_name_exhausted')
+
+
+def validate_heif_container(fileobj) -> bool:
+    """Bounded structural HEIC/HEIF signature validation; does not transcode.
+
+    A valid ISO BMFF ftyp with a HEVC still-image brand, then a meta box and
+    media data box, are required. Generic AVIF/MP4 or spoofed prefixes fail.
+    Full codec decoding is deliberately not attempted here.
+    """
+    hevc_brands = {b'heic', b'heix', b'hevc', b'hevx', b'heim', b'heis'}
+    fileobj.seek(0, os.SEEK_END)
+    total = fileobj.tell()
+    fileobj.seek(0)
+    if total < 32 or total > MAX_FILE_BYTES:
+        return False
+    seen_meta = seen_mdat = False
+    offset = 0
+    try:
+        while offset + 8 <= total:
+            fileobj.seek(offset)
+            first = fileobj.read(8)
+            size = int.from_bytes(first[:4], 'big')
+            tag = first[4:8]
+            header_size = 8
+            if size == 1:
+                if offset + 16 > total: return False
+                size = int.from_bytes(fileobj.read(8), 'big')
+                header_size = 16
+            elif size == 0:
+                size = total - offset
+            if size < header_size or offset + size > total:
+                return False
+            if offset == 0:
+                if tag != b'ftyp' or size < 20 or size > 4096:
+                    return False
+                brands = fileobj.read(size - header_size)
+                if len(brands) < 12 or (len(brands)-8) % 4:
+                    return False
+                major = brands[:4]
+                compatible = {brands[i:i+4] for i in range(8, len(brands), 4)}
+                if not ({major} | compatible) & hevc_brands:
+                    return False
+                if b'avif' == major or b'avis' == major:
+                    return False
+            if tag == b'meta':
+                seen_meta = True
+            if tag == b'mdat':
+                seen_mdat = True
+            offset += size
+        return offset == total and seen_meta and seen_mdat
+    except (OSError, ValueError):
+        return False
+    finally:
+        fileobj.seek(0)
 
 
 class InboundStaging:
@@ -104,6 +161,8 @@ class InboundStaging:
             valid = header.startswith(b'\xff\xd8\xff')
         elif suffix == '.webp':
             valid = header.startswith(b'RIFF') and header[8:12] == b'WEBP'
+        elif suffix in ('.heic', '.heif'):
+            valid = validate_heif_container(self.temp)
         elif suffix in ('.docx', '.xlsx'):
             valid = False
             if zipfile.is_zipfile(self.temp):
@@ -115,11 +174,21 @@ class InboundStaging:
                     required = 'word/document.xml' if suffix == '.docx' else 'xl/workbook.xml'
                     valid = '[content_types].xml' in names and required in names
         else:
-            self.temp.seek(0)
-            raw = self.temp.read(MAX_FILE_BYTES + 1)
+            # Streaming UTF-8 validation: never accumulate 50 MiB of text in RAM.
+            import codecs
+            decoder = codecs.getincrementaldecoder('utf-8-sig')('strict')
+            valid = True
+            prefix = ''
             try:
-                decoded = raw.decode('utf-8-sig')
-                valid = '\x00' not in decoded and not decoded.lstrip().lower().startswith(('<script', '<!doctype html', '<html', '<?php'))
+                while part := self.temp.read(MAX_CHUNK_BYTES):
+                    decoded = decoder.decode(part)
+                    if '\x00' in decoded:
+                        valid = False; break
+                    if len(prefix) < 96:
+                        prefix += decoded[:96 - len(prefix)]
+                if valid:
+                    decoder.decode(b'', final=True)
+                    valid = not prefix.lstrip().lower().startswith(('<script', '<!doctype html', '<html', '<?php'))
             except UnicodeDecodeError:
                 valid = False
         self.temp.seek(0)
@@ -184,6 +253,75 @@ class InboundStaging:
             os.close(directory)
             self.temp.close()
         return self.target
+
+    def commit_atomic_chat_image(self, *, approved: bool, revalidate) -> Path:
+        """macOS-only #126 save: no partially written destination is visible.
+
+        Copy to a private same-directory staging name, set quarantine, fsync,
+        then atomically hard-link to an exclusive final filename. No-overwrite
+        hard link does not replace another file and cannot cross filesystems.
+        """
+        import uuid
+        if sys.platform != 'darwin':
+            raise PermissionError('Trusted desktop atomic image save unavailable')
+        if self.expected_size > MAX_CHAT_IMAGE_BYTES:
+            raise ValueError('Chat image exceeds independent 10 MiB limit')
+        if self.count != self.expected_size or self.hasher.hexdigest() != self.sha256:
+            raise ValueError('File size or checksum mismatch')
+        self._validate_content()
+        # Decode actual pixels, not just signature bytes, before exposing the
+        # final path. Shared validator bounds dimensions and decompression.
+        from mcptoai_core.documents import validate_complete, DocumentError
+        self.temp.seek(0)
+        try:
+            validate_complete(self.temp.read(MAX_FILE_BYTES + 1), self.target.suffix.lower().lstrip('.'))
+        except DocumentError as exc:
+            raise ValueError('Image content validation failed') from exc
+        finally:
+            self.temp.seek(0)
+        if not approved or not revalidate():
+            raise PermissionError('Trusted device approval required')
+        parent = self.target.parent
+        if parent.is_symlink():
+            raise PermissionError('Symlinked workspace directory')
+        directory = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        staged_name = '.mcptoai-image-' + uuid.uuid4().hex + '.part'
+        staged = False
+        linked = False
+        try:
+            if (os.stat(parent).st_ino, os.stat(parent).st_dev) != (os.fstat(directory).st_ino, os.fstat(directory).st_dev):
+                raise PermissionError('Workspace directory changed')
+            fd = os.open(staged_name, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
+                         0o600, dir_fd=directory)
+            staged = True
+            with os.fdopen(fd, 'wb') as output:
+                self.temp.seek(0)
+                while part := self.temp.read(MAX_CHUNK_BYTES):
+                    output.write(part)
+                output.flush()
+                os.fsync(output.fileno())
+                self._mark_origin(output.fileno())
+                os.fsync(output.fileno())
+            if (os.stat(parent).st_ino, os.stat(parent).st_dev) != (os.fstat(directory).st_ino, os.fstat(directory).st_dev):
+                raise PermissionError('Workspace directory moved during transfer')
+            try:
+                os.link(staged_name, self.target.name,
+                        src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+            except FileExistsError as exc:
+                raise DestinationExistsError('target', 'exclusive_atomic_link') from exc
+            linked = True
+            os.fsync(directory)
+            return self.target
+        except BaseException:
+            if linked:
+                os.unlink(self.target.name, dir_fd=directory)
+            raise
+        finally:
+            if staged:
+                try: os.unlink(staged_name, dir_fd=directory)
+                except FileNotFoundError: pass
+            os.close(directory)
+            self.temp.close()
 
     def close(self):
         self.temp.close()

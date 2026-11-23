@@ -85,6 +85,9 @@ class RelayClient:
         self._inbound = InboundManager(allowed_roots=cfg.allowed_roots)
         self._inbound_approval = InboundApproval()
         self._inbound_grants = {}
+        from mcptoai_core.chat_image_receipts import SavedChatImageReceipts
+        self._saved_chat_images = SavedChatImageReceipts()
+        self._saved_chat_pending = {}
         # Görev izleyicisi: web'e gönderilen son durumların imzası (yalnızca değişenler gider).
         self._job_sig={}; self._job_watch_task=None
         # Web'e en son bildirilen geçmiş tercihi; Desktop'tan değiştirilince yeniden bildirilir.
@@ -184,6 +187,8 @@ class RelayClient:
                         await _receive_messages(ws, self._handle)
                     finally:
                         self._chat_attachments.close()
+                        self._saved_chat_images.clear()
+                        self._saved_chat_pending.clear()
                         await self._interrupt_inbound_uploads()
                         self.ws=None
             except asyncio.CancelledError: raise
@@ -224,6 +229,16 @@ class RelayClient:
                 paired_identity()
                 if self.cfg.allowed_roots:
                     capabilities.append('inbound_upload_v1')
+                    # Explicit opt-in for >10 MiB; old agents advertise only inbound_upload_v1.
+                    from .inbound_transfer import MAX_FILE_BYTES
+                    if MAX_FILE_BYTES >= 50 * 1024 * 1024:
+                        capabilities.append('inbound_upload_50mib_v1')
+                        capabilities.append('inbound_subfolder_create_v1')
+                    if sys.platform == 'darwin':
+                        from .inbound_transfer import ALLOWED_SUFFIXES
+                        if {'.heic', '.heif'} <= ALLOWED_SUFFIXES:
+                            capabilities.append('inbound_heic_original_v1')
+                        capabilities.append('chat_image_device_save_v1')
             except (PermissionError, OSError, ValueError):
                 pass
         capabilities.extend(["document_processing_v1","chat_attachments_v1"])
@@ -456,6 +471,8 @@ class RelayClient:
             logger.info('Inbound transfer id=%s decision=interrupted', tid)
         self._inbound.disconnect()
         self._inbound_grants.clear()
+        self._saved_chat_images.clear()
+        self._saved_chat_pending.clear()
 
     async def _handle_inbound_upload(self, msg):
         """Linux interactive-only receive path; Electron remains fail closed."""
@@ -478,8 +495,28 @@ class RelayClient:
         phase = {'file_offer':'offer','file_chunk':'chunk','file_finish':'finish','file_cancel':'cancel'}.get(kind,'unknown')
         try:
             if kind == 'file_offer':
+                # Chat image-save retains the separate 10 MiB policy.
+                if msg.get('purpose') == 'chat_image_save' and (type(msg.get('size')) is not int or msg['size'] > 10 * 1024 * 1024):
+                    raise ValueError('Chat image size exceeds limit')
+                if msg.get('purpose') == 'chat_image_save':
+                    from mcptoai_core.chat_image_receipts import IMAGE_SUFFIXES
+                    from .inbound_approval import paired_identity
+                    from pathlib import Path
+                    def valid_id(value):
+                        return isinstance(value, str) and str(uuid.UUID(value)) == value
+                    if (sys.platform != 'darwin' or not valid_id(msg.get('session_id'))
+                            or not valid_id(msg.get('turn_id')) or not valid_id(tid)
+                            or Path(str(msg.get('name',''))).suffix.lower() not in IMAGE_SUFFIXES
+                            or msg.get('rename_if_exists') is True):
+                        raise PermissionError('invalid_chat_image_offer')
+                    self._saved_chat_pending[tid] = (msg['session_id'], msg['turn_id'], paired_identity())
+                elif msg.get('purpose') is not None:
+                    raise PermissionError('unexpected_upload_purpose')
                 session = self._inbound.offer(transfer_id=tid,name=msg['name'],
-                    size=msg['size'],sha256=msg['sha256'],workspace=msg['workspace'],rename_if_exists=msg.get('rename_if_exists') is True)
+                    size=msg['size'],sha256=msg['sha256'],workspace=msg['workspace'],rename_if_exists=msg.get('rename_if_exists') is True,
+                    subfolder=msg.get('subfolder') if msg.get('purpose') is None else None)
+                if tid in getattr(self, '_saved_chat_pending', {}):
+                    session.preview += '\nPurpose: explicitly save this chat image to the device (file tools still require separate approval).'
                 await session.record_activity('requested')
                 await session.record_activity('approval_pending')
                 try:
@@ -487,13 +524,22 @@ class RelayClient:
                         self._inbound_approval.request, session,
                         prompt=(lambda request, preview: local_headless_prompt(request,preview,transfer_id=tid)
                                 if sys.platform == 'linux' else
-                                local_desktop_prompt(request,preview,transfer_id=tid))),timeout=60)
+                                local_desktop_prompt(request,preview,transfer_id=tid,
+                                    chat_scope=self._saved_chat_pending.get(tid)[:2] if tid in getattr(self, '_saved_chat_pending', {}) else None,
+                                    subfolder_to_create=session.subfolder if session.create_folder else None))),timeout=60)
                 except (PermissionError, asyncio.TimeoutError):
                     await session.record_activity('denied')
                     self._inbound.cancel(tid)
+                    getattr(self, '_saved_chat_pending', {}).pop(tid,None)
                     await self._send({'type':'file_ready','transfer_id':tid,'status':'denied','reason':'approval_denied'})
                     return
-                self._inbound_grants[tid] = grant
+                # Consume the short-lived native ActionGrant immediately, before
+                # starting a potentially 600-second streamed upload. Retain only
+                # a session-bound, one-transfer proof (never reusable after pop).
+                bound = self._inbound_approval.bind_for_transfer(session, grant)
+                if bound is None:
+                    raise PermissionError('inbound_local_grant_invalid')
+                self._inbound_grants[tid] = bound
                 await session.record_activity('approved')
                 await self._send({'type':'file_ready','transfer_id':tid,'status':'ready'})
             elif kind == 'file_chunk':
@@ -504,11 +550,23 @@ class RelayClient:
                 await self._send({'type':'file_ack','transfer_id':tid,'index':index})
             elif kind == 'file_finish':
                 session = self._inbound.get(tid)
-                grant = self._inbound_grants.pop(tid)
+                bound = self._inbound_grants.pop(tid)
                 # Revalidate workspace against the *current* allowed root set.
-                target = validate_destination(session.target.name,str(session.target.parent),self.cfg.allowed_roots)
-                await asyncio.to_thread(session.finish,consume_grant=lambda: self._inbound_approval.consume(session,grant),
-                                        revalidate_destination=lambda: target)
+                # For a planned missing subfolder, strict validation is delayed
+                # until AFTER trusted approval creates the directory. For an
+                # already existing subfolder, validate immediately as usual.
+                target = (session.target if session.subfolder and session.create_folder else
+                          validate_destination(session.target.name,str(session.target.parent),self.cfg.allowed_roots))
+                await asyncio.to_thread(session.finish,consume_grant=lambda: self._inbound_approval.verify_bound_transfer(session,bound),
+                                        revalidate_destination=lambda: target,
+                                        atomic_chat_image=tid in getattr(self, '_saved_chat_pending', {}))
+                if tid in getattr(self, '_saved_chat_pending', {}):
+                    from .inbound_approval import paired_identity
+                    sid, turn, original_identity = self._saved_chat_pending.pop(tid)
+                    if paired_identity() != original_identity:
+                        raise PermissionError('device_pairing_changed')
+                    self._saved_chat_images.add(transfer_id=tid,session_id=sid,turn_id=turn,
+                        path=str(target),sha256=session.staging.sha256,paired_identity=original_identity)
                 await session.record_activity('completed')
                 self._inbound.cancel(tid)
                 await self._send({'type':'file_result','transfer_id':tid,'status':'completed','path':str(target),'sha256':session.staging.sha256})
@@ -516,21 +574,37 @@ class RelayClient:
                 session = self._inbound.get(tid)
                 await session.record_activity('cancelled')
                 self._inbound_grants.pop(tid,None)
+                getattr(self, '_saved_chat_pending', {}).pop(tid,None)
                 self._inbound.cancel(tid)
         except (ValueError, TypeError, KeyError, PermissionError, FileExistsError, OSError) as exc:
             from .inbound_transfer import DestinationExistsError
+            active = self._inbound._sessions.get(tid) if getattr(self, '_inbound', None) else None
+            fallback_kind = ('parent' if isinstance(exc, (NotADirectoryError, FileNotFoundError))
+                             else 'subfolder' if phase == 'finish' and active and active.subfolder
+                             else 'target' if phase == 'finish' else 'offer')
             failure_stage = getattr(exc, 'stage', phase)
-            path_kind = getattr(exc, 'kind', 'parent' if isinstance(exc, (NotADirectoryError, FileNotFoundError)) else 'unknown')
-            logger.warning('Inbound upload rejected: %s phase=%s stage=%s path_kind=%s',
-                           type(exc).__name__, phase, failure_stage, path_kind)
+            path_kind = getattr(exc, 'kind', fallback_kind)
+            fallback_operation = ('validate_or_commit_subfolder' if phase == 'finish' and path_kind == 'subfolder'
+                                  else 'commit_target' if phase == 'finish' else 'unclassified_' + phase)
+            operation = getattr(exc, 'operation', fallback_operation)
+            # No absolute paths in logs: approved root basename, bounded relative
+            # subfolder and failing path component allow precise diagnosis.
+            from pathlib import Path as _LogPath
+            workspace_name = _LogPath(active.workspace_root).name if active else '-'
+            relative = (active.subfolder or '-') if active else '-'
+            component = getattr(exc, 'path_component', '-')
+            logger.warning('Inbound upload rejected: %s phase=%s stage=%s operation=%s path_kind=%s workspace=%s subfolder=%s component=%s errno=%s',
+                           type(exc).__name__, phase, failure_stage, operation, path_kind,
+                           workspace_name[:60], relative[:240], component[:120], getattr(exc, 'errno', None))
             try:
                 session = self._inbound.get(tid)
                 await session.record_activity('failed')
             except PermissionError:
                 pass
             self._inbound_grants.pop(tid,None)
+            getattr(self, '_saved_chat_pending', {}).pop(tid,None)
             self._inbound.cancel(tid)
-            await self._send({'type':'file_result','transfer_id':tid,'status':'failed','ok':False,'reason':('invalid_workspace' if isinstance(exc,(FileNotFoundError,PermissionError)) else 'file_exists' if isinstance(exc,FileExistsError) else 'invalid_size' if isinstance(exc,ValueError) and 'size' in str(exc).lower() else 'device_error')})
+            await self._send({'type':'file_result','transfer_id':tid,'status':'failed','ok':False,'reason':('invalid_upload_state' if getattr(exc,'kind',None)=='approval' or str(exc)=='inbound_local_grant_invalid' else 'device_error' if isinstance(exc,PermissionError) and getattr(exc,'operation',None) in ('mkdirat','openat_root','openat_nofollow','validate_post_mkdir') else 'invalid_subfolder' if isinstance(exc,(ValueError,PermissionError,NotADirectoryError,FileExistsError)) and (getattr(exc,'kind',None)=='subfolder' or str(exc).startswith('subfolder_') or str(exc).startswith('subfolder')) else 'invalid_workspace' if isinstance(exc,(FileNotFoundError,PermissionError)) else 'file_exists' if isinstance(exc,FileExistsError) else 'invalid_size' if isinstance(exc,ValueError) and 'size' in str(exc).lower() else 'device_error')})
 
     async def _handle(self,msg):
         typ=msg.get("type")
@@ -1054,6 +1128,7 @@ class RelayClient:
                 await self._send_event(sid,{"type":"approval_resolved","approval_id":aid,"status":outcome},turn_id=turn_id)
         capability=str(msg.get("capability") or "").strip().casefold()
         attachments = None
+        saved_device_images = None
         try:
             if msg.get("attachments") is not None:
                 raise DocumentError("invalid_attachments", "Inline relay attachments are unsupported. Use file transfers.")
@@ -1061,6 +1136,16 @@ class RelayClient:
                 if self.ws is None:
                     raise DocumentError("invalid_attachments", "Attachment connection was lost. Files were not sent to the model.")
                 attachments = self._chat_attachments.consume(msg["attachment_ids"], sid, message_id)
+            if 'saved_image_transfer_ids' in msg:
+                if self.ws is None or capability:
+                    raise DocumentError('saved_image_denied', 'Device save grants are unavailable for this turn.')
+                try:
+                    from .inbound_approval import paired_identity
+                    saved_device_images = self._saved_chat_images.consume(
+                        msg['saved_image_transfer_ids'], session_id=sid, turn_id=message_id,
+                        paired_identity=paired_identity(), allowed_roots=self.cfg.allowed_roots)
+                except (PermissionError, ValueError, TypeError, OSError):
+                    raise DocumentError('saved_image_denied', 'Saved image approval expired or does not match this turn.') from None
             if capability and attachments is not None: raise DocumentError("unsupported_route", "Attachments are supported only in chat turns.")
             if capability: await session.run_capability(capability,text,approver,emit)
             else:
@@ -1077,7 +1162,7 @@ class RelayClient:
                                     'unknown_phases':[key for key in PHASES if phases[key] is None]})
                     except (KeyError, TypeError, ValueError, AttributeError):
                         logger.warning('Invalid turn timing snapshot discarded')
-                await session.run(text,approver,emit,images=images,language=msg.get("language"),context=context,preferred_mcp_server_ids=preferred,attachments=attachments,timing_sink=timing_sink)
+                await session.run(text,approver,emit,images=images,language=msg.get("language"),context=context,preferred_mcp_server_ids=preferred,attachments=attachments,saved_device_images=saved_device_images,timing_sink=timing_sink)
         except asyncio.CancelledError:
             if turn_id not in self._cancel_requested: raise
             # Kullanıcı durdurdu: hata değil, düzenli bir son. Görevin iptal sayacı sıfırlanır.

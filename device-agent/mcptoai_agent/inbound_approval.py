@@ -6,6 +6,9 @@ before advertising upload capability in desktop builds.
 from __future__ import annotations
 import os
 import sys
+from dataclasses import dataclass
+import hmac
+from mcptoai_core.action_contract import preview_digest
 from mcptoai_core.action_contract import DeviceApprovalGate
 
 
@@ -64,7 +67,7 @@ def desktop_approval_available():
         return False
 
 
-def local_desktop_prompt(request, preview, *, transfer_id):
+def local_desktop_prompt(request, preview, *, transfer_id, chat_scope=None, subfolder_to_create=None):
     """Ask Electron main through local owner-only AF_UNIX socket, fail closed."""
     import json
     import socket
@@ -79,6 +82,11 @@ def local_desktop_prompt(request, preview, *, transfer_id):
             payload = {'transfer_id': transfer_id, 'name': args['name'],
                        'size': int(args['size']), 'workspace': str(__import__('pathlib').Path(args['path']).parent),
                        'sha256': args['sha256']}
+            if subfolder_to_create is not None:
+                payload['create_subfolder'] = subfolder_to_create
+                payload['workspace'] = str(__import__('pathlib').Path(args['path']).parents[len(subfolder_to_create.split('/'))])
+            if chat_scope is not None:
+                payload.update(purpose='chat_image_save',session_id=chat_scope[0],turn_id=chat_scope[1])
             client.sendall((json.dumps(payload, separators=(',', ':')) + '\n').encode())
             response = b''
             while b'\n' not in response and len(response) < 1024:
@@ -89,6 +97,20 @@ def local_desktop_prompt(request, preview, *, transfer_id):
             return json.loads(response.split(b'\n')[0]).get('approved') is True
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return False
+
+
+@dataclass(frozen=True)
+class BoundInboundAuthorization:
+    """One-use native consent, consumed up front and scoped to one live transfer.
+
+    The relay session's own 600-second deadline controls subsequent byte receipt;
+    the generic 60-second ActionGrant must not expire mid-transfer.
+    """
+    user_id: str
+    device_id: str
+    transfer_id: str
+    action_digest: str
+    preview_digest: str
 
 
 class InboundApproval:
@@ -114,3 +136,29 @@ class InboundApproval:
             return False
         return self.gate.consume(nonce=grant.nonce,user_id=owner,device_id=device,
             turn_id=session.transfer_id,request=session.request,preview=session.preview)
+
+    def bind_for_transfer(self, session, grant):
+        """Consume the native grant *before* telling web that upload may start."""
+        if not self.consume(session, grant):
+            return None
+        try:
+            owner, device = paired_identity()
+        except PermissionError:
+            return None
+        return BoundInboundAuthorization(owner, device, session.transfer_id,
+            session.request.digest(), preview_digest(session.request, session.preview))
+
+    def verify_bound_transfer(self, session, bound):
+        """A completed transfer may write only with its original scoped consent."""
+        if not isinstance(bound, BoundInboundAuthorization):
+            return False
+        try:
+            owner, device = paired_identity()
+            return (session.approved and not session.closed and
+                hmac.compare_digest(owner, bound.user_id) and
+                hmac.compare_digest(device, bound.device_id) and
+                hmac.compare_digest(session.transfer_id, bound.transfer_id) and
+                hmac.compare_digest(session.request.digest(), bound.action_digest) and
+                hmac.compare_digest(preview_digest(session.request, session.preview), bound.preview_digest))
+        except (PermissionError, ValueError, TypeError):
+            return False

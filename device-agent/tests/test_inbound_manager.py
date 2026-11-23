@@ -26,11 +26,11 @@ def test_existing_destination_never_overwritten(tmp_path):
     assert target.read_bytes()==b'original'
 
 
-def test_maximum_10_mib_and_one_byte_over(tmp_path):
+def test_maximum_50_mib_and_one_byte_over(tmp_path):
     from mcptoai_agent.inbound_transfer import MAX_FILE_BYTES
     mgr=InboundManager(allowed_roots=[tmp_path])
     offer=dict(name='large.pdf',sha256='a'*64,workspace=str(tmp_path))
     session=mgr.offer(transfer_id='max',size=MAX_FILE_BYTES,**offer)
-    assert session.staging.expected_size==10*1024*1024
+    assert session.staging.expected_size==50*1024*1024
     mgr.cancel('max')
     with pytest.raises(ValueError):mgr.offer(transfer_id='oversize',size=MAX_FILE_BYTES+1,**offer)

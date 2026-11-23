@@ -39,6 +39,8 @@ from fastmcp import FastMCP
 from ..config import Settings
 from ..sensitive_paths import check_path, _windows_long_path
 from ..secret_store import get_secret, api_key_name
+from ..windows_console import shell_command_and_encoding
+from ..workspace_policy import within_allowed_roots
 
 logger = logging.getLogger("mcptoai.tools")
 
@@ -62,7 +64,7 @@ def build_server(cfg: Settings, *, artifact_session_id: str | None = None) -> Fa
     def _safe_path(path: str, *, must_exist: bool = False) -> Path:
         candidate = Path(_windows_long_path(path) if os.name == "nt" else path).expanduser().resolve(strict=False)
         check_path(candidate, write=not must_exist)
-        if not any(candidate == r or candidate.is_relative_to(r) for r in cfg.allowed_roots):
+        if not within_allowed_roots(candidate, cfg.allowed_roots):
             raise PermissionError("Path is outside allowed workspace")
         if must_exist and not candidate.exists():
             raise FileNotFoundError(candidate)
@@ -145,7 +147,8 @@ def build_server(cfg: Settings, *, artifact_session_id: str | None = None) -> Fa
             kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             kwargs["start_new_session"] = True
-        proc = await create_subprocess_shell(command, **kwargs)
+        shell_command, forced_encoding = shell_command_and_encoding(command)
+        proc = await create_subprocess_shell(shell_command, **kwargs)
         buf = bytearray()
         limit = max(cfg.max_output_chars * 4, 65536)  # bellek sınırı; fazlası okunup atılır
 
@@ -158,7 +161,7 @@ def build_server(cfg: Settings, *, artifact_session_id: str | None = None) -> Fa
                     buf.extend(chunk[: limit - len(buf)])
 
         # Çıktı, subprocess(text=True) ile aynı kodlamayla çözülür (Windows'ta yerel kod sayfası).
-        encoding = locale.getpreferredencoding(False)
+        encoding = forced_encoding or locale.getpreferredencoding(False)
         drain_task = asyncio.create_task(drain())
         wait_task = asyncio.create_task(proc.wait())
 
@@ -309,7 +312,30 @@ def build_server(cfg: Settings, *, artifact_session_id: str | None = None) -> Fa
         target = _safe_path(path, must_exist=True)
         if target.stat().st_size > cfg.max_read_bytes:
             return f"[ERROR] Dosya çok büyük (> {cfg.max_read_bytes} bayt)"
-        return _truncate(target.read_text(errors="replace"))
+        return _truncate(target.read_text(encoding="utf-8", errors="replace"))
+
+    @mcp.tool(description="Create a folder under an approved workspace. An already-existing safe exact folder is a successful no-op; filenames, aliases, junctions and symlinks are refused. Explicit local approval required for creation.")
+    @safe_tool
+    def create_folder(workspace: str, relative_path: str, language: str = "en") -> str:
+        from mcptoai_core.safe_subfolders import create_subfolder
+        from mcptoai_agent.folder_errors import (
+            existing_approved_folder, folder_error_localized, localized_folder_status)
+        try:
+            existing = existing_approved_folder(workspace, relative_path, cfg.allowed_roots, check_path=check_path)
+            if existing is not None:
+                return localized_folder_status('already_exists', language)
+            try:
+                created = create_subfolder(workspace, relative_path, cfg.allowed_roots, check_path=check_path)
+            except FileExistsError:
+                # Another approved operation may have created the exact directory
+                # concurrently. Never turn an alias, file or reparse into success.
+                existing = existing_approved_folder(workspace, relative_path, cfg.allowed_roots, check_path=check_path)
+                if existing is not None:
+                    return localized_folder_status('already_exists', language)
+                raise
+        except (ValueError, PermissionError, FileExistsError, OSError) as exc:
+            return f"[ERROR] create_folder: {folder_error_localized(exc, language)}"
+        return f"Created folder: {created}"
 
     @mcp.tool(description="Write a UTF-8 file inside the allowed roots; refuses overwrite by default.")
     @safe_tool
@@ -318,8 +344,9 @@ def build_server(cfg: Settings, *, artifact_session_id: str | None = None) -> Fa
         target = _safe_path(path)
         if target.exists() and not overwrite:
             return f"[ERROR] Dosya zaten var: {target} (overwrite=true gerekli)"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content)
+        if not target.parent.is_dir():
+            raise FileNotFoundError("Parent folder does not exist; create it explicitly first")
+        target.write_text(content, encoding="utf-8")
         return f"Yazıldı: {target} ({len(content)} karakter)"
 
     @mcp.tool(description="Search within an approved root (at most 10 seconds, 200 matches, six directory levels); partial results explicitly marked.")
