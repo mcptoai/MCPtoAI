@@ -23,6 +23,19 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Require signed annotated release tag, then checkout exact source
+        run: |
+          set -euo pipefail
+          tag="refs/tags/v$RELEASE_VERSION"
+          # A checkout of tag ref can create a local lightweight tag pointing
+          # to the peeled commit. Do not use `git fetch --tags` (clobber).
+          git tag -d "v$RELEASE_VERSION" >/dev/null 2>&1 || true
+          git fetch --no-tags origin "refs/tags/v$RELEASE_VERSION:$tag"
+          [[ "$(git cat-file -t "$tag")" == tag ]] || { echo "Signed annotated tag required"; exit 1; }
+          git cat-file -p "$tag" | grep -q -- '-----BEGIN SSH SIGNATURE-----' || { echo "SSH-signed tag required"; exit 1; }
+          git checkout --detach --force "$tag^{}"
+          echo "VERIFIED_TAG_OBJECT=$(git rev-parse "$tag")"
+          echo "VERIFIED_SOURCE_COMMIT=$(git rev-parse HEAD)"
       - name: Validate all source versions
         shell: bash
         env:
@@ -35,7 +48,9 @@ jobs:
             version="${INPUT_VERSION}"
           fi
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid version"; exit 1; }
-          [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == "v$version" ]] || { echo "Manually dispatch using the approved v$version tag ref, not a branch"; exit 1; }
+          # A manual workflow may run from the reviewed maintenance branch.
+          # Always verify the signed immutable tag and checkout that tag's
+          # exact source before reading notes and publishing any asset.
           python3 - "$version" <<'PY'
           import json, pathlib, re, sys
           version = sys.argv[1]
@@ -54,14 +69,6 @@ jobs:
           version="$RELEASE_VERSION"
           curl -fsSI "https://api.mcptoai.com/releases/macos/MCPtoAI-$version-arm64.dmg?release=$version" >/dev/null
           curl -fsSI "https://api.mcptoai.com/releases/windows/MCPtoAI-$version-x64-Setup.exe" >/dev/null
-      - name: Require an existing signed annotated tag
-        run: |
-          set -euo pipefail
-          git fetch --tags
-          tag="refs/tags/v$RELEASE_VERSION"
-          [[ "$(git cat-file -t "$tag")" == tag ]] || { echo "Existing signed annotated tag required"; exit 1; }
-          git cat-file -p "$tag" | grep -q -- '-----BEGIN SSH SIGNATURE-----' || { echo "Signed SSH tag required"; exit 1; }
-          echo "Approved tag $tag points to $(git rev-parse "$tag^{}")"
       - name: Check for existing GitHub Release
         id: existing_release
         env:
